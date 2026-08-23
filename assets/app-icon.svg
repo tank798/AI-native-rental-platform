@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="栖合应用图标">
-  <rect width="512" height="512" rx="112" fill="#173f31"/>
-  <path d="M118 238 256 124l138 114v146a34 34 0 0 1-34 34H152a34 34 0 0 1-34-34V238Z" fill="#f7f2e8"/>
-  <path d="M204 418V292h104v126" fill="#d7a85d"/>
-  <path d="M176 235c36 17 66 17 91 1 28-18 53-19 78-3" fill="none" stroke="#173f31" stroke-linecap="round" stroke-width="18"/>
+  <rect width="512" height="512" rx="112" fill="#090909"/>
+  <path d="M126 190h260v196H126z" fill="none" stroke="#fff" stroke-linejoin="round" stroke-width="28"/>
+  <path d="M256 190v196M126 286h260" fill="none" stroke="#fff" stroke-width="28"/>
+  <circle cx="326" cy="334" r="12" fill="#fff"/>
 </svg>

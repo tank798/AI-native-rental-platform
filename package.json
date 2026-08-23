@@ -1,11 +1,11 @@
 {
   "name": "qihe-rental-agent-prototype",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 4173",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/app.mjs && node --check src/simulation-engine.mjs && node --check src/fixtures.mjs && node --check service-worker.js"
+    "check": "node --check src/app.mjs && node --check src/demand-parser.mjs && node --check src/simulation-engine.mjs && node --check src/fixtures.mjs && node --check service-worker.js"
   }
 }

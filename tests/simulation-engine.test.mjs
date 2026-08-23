@@ -19,6 +19,14 @@ test("个人转租可以用条件换取更低租金", () => {
   assert.match(result.agreementLabel, /12 个月/);
 });
 
+test("位置文本会按商圈、站点与地址提示归一匹配", () => {
+  const mandate = structuredClone(baseMandate);
+  mandate.locations = ["静安寺商圈"];
+
+  const result = evaluateListing(mandate, byId("home-nanyang"));
+  assert.equal(result.status, "eligible");
+});
+
 test("AI 不会越过租户的私密最高预算", () => {
   const result = evaluateListing(baseMandate, byId("home-over-budget"));
   assert.equal(result.status, "excluded");

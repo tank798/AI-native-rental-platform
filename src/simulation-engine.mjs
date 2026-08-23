@@ -44,6 +44,25 @@ function hasProhibitedFee(listing) {
   return Number(listing.fees?.service || 0) > 0 || Number(listing.fees?.intermediary || 0) > 0;
 }
 
+function normalizePlace(value) {
+  return String(value || "")
+    .replace(/(?:上海市|上海|市|区|县|地铁站|站|商圈|附近|周边|一带)/g, "")
+    .replace(/[\s·・]/g, "")
+    .trim();
+}
+
+function locationMatches(requestedLocations, listing) {
+  const listingPlaces = [listing.location, listing.station, listing.district, listing.addressHint]
+    .map(normalizePlace)
+    .filter(Boolean);
+
+  return requestedLocations.some((requested) => {
+    const query = normalizePlace(requested);
+    if (!query) return false;
+    return listingPlaces.some((place) => place.includes(query) || query.includes(place));
+  });
+}
+
 function integrityAssessment(listing) {
   const reasons = [];
 
@@ -70,7 +89,7 @@ function integrityAssessment(listing) {
 function hardConstraintAssessment(mandate, listing) {
   const reasons = [];
 
-  if (!mandate.locations.includes(listing.location)) reasons.push("location");
+  if (!locationMatches(mandate.locations, listing)) reasons.push("location");
   if (listing.commuteMinutes > mandate.maxCommuteMinutes) reasons.push("commute");
   if (compareDate(listing.availableFrom, mandate.moveInWindow.to) > 0) reasons.push("move_in");
   if (
@@ -213,7 +232,7 @@ function preferenceScore(mandate, listing, agreedRent, unknown) {
 function buildReasons(mandate, listing, agreedRent) {
   const reasons = [];
   reasons.push(`${listing.commuteMinutes} 分钟到目标地点，未超过 ${mandate.maxCommuteMinutes} 分钟上限`);
-  reasons.push(`AI 已将价格确认到 ${money(agreedRent)}/月`);
+  reasons.push(`价格已确认到 ${money(agreedRent)}/月`);
   if (listing.facilities?.ensuite) reasons.push("独立卫生间命中加分偏好");
   if (listing.facilities?.exposure === "south") reasons.push("朝南采光命中偏好");
   if (listing.facilities?.washerType === "drum") reasons.push("滚筒洗衣机命中偏好");
@@ -327,7 +346,7 @@ export function matchMandate(mandate, candidateListings, options = {}) {
       at: startedAt,
       actor: "平台",
       type: "scan",
-      title: `扫描 ${candidateListings.length} 套模拟房源`,
+      title: `扫描 ${candidateListings.length} 套房源`,
       detail: "先核验发布角色、出租权、费用清单与房源时效。"
     },
     ...quarantined.map((result) => ({
@@ -374,6 +393,8 @@ export function validateSupplyDraft(draft) {
   if (!ALLOWED_SUPPLY_ROLES.has(draft.role)) errors.push("只允许产权人直租或当前承租人个人转租");
   if (!draft.address?.trim()) errors.push("需要完整地址用于平台核验");
   if (!Number.isFinite(Number(draft.listedRent)) || Number(draft.listedRent) <= 0) errors.push("租金必须是有效金额");
+  if (!draft.availableFrom) errors.push("需要填写可入住日期");
+  else if (compareDate(draft.availableFrom, SIMULATION_DATE) < 0) errors.push("可入住日期不能早于今天");
   if (Number(draft.fees?.service || 0) > 0 || Number(draft.fees?.intermediary || 0) > 0) {
     errors.push("不得收取中介费、服务费、信息费或带看费");
   }

@@ -1,13 +1,17 @@
-const CACHE_NAME = "qihe-prototype-v2";
+const CACHE_NAME = "qihe-prototype-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
-  "./src/styles.css",
+  "./src/styles-v2.css",
   "./src/app.mjs",
+  "./src/demand-parser.mjs",
   "./src/fixtures.mjs",
   "./src/simulation-engine.mjs",
-  "./assets/app-icon.svg"
+  "./assets/app-icon.svg",
+  "./assets/room-sunlit-v2.jpg",
+  "./assets/room-lanehouse-v2.jpg",
+  "./assets/room-compact-v2.jpg"
 ];
 
 self.addEventListener("install", (event) => {

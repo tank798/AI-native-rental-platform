@@ -1,4 +1,5 @@
 import { baseMandate, demoSupplyDraft, labScenarios } from "./fixtures.mjs";
+import { parseDemandText, parsedDemandTags } from "./demand-parser.mjs";
 import {
   evaluateReport,
   runLabScenario,
@@ -8,12 +9,6 @@ import {
 
 const app = document.querySelector("#app");
 const STORAGE_KEY = "qihe-prototype-state-v1";
-
-const exampleDemands = {
-  commute: "我想在上海静安寺附近找房，预算 3000 左右，最晚 9 月初入住，通勤最好不超过 35 分钟，可以接受女生合租。",
-  quiet: "想找江苏路附近安静一点的房间，预算不超过 3100，朝南最好，需要厨房和洗衣机，不接受任何中介或服务费。",
-  value: "我想找 2700 到 3000 的个人转租，8 月底入住，能合租，但希望室友作息正常，水电一定要说清楚。"
-};
 
 const iconPaths = {
   lab: '<path d="M9 3v5l-4.8 8.3A3.1 3.1 0 0 0 6.9 21h10.2a3.1 3.1 0 0 0 2.7-4.7L15 8V3"/><path d="M7 14h10M8 3h8"/>',
@@ -60,7 +55,41 @@ function loadStoredState() {
 }
 
 const stored = loadStoredState();
-const defaults = window.QIHE_TWEAK_DEFAULTS || { theme: "ledger", density: "comfortable", motion: "full" };
+const defaults = window.QIHE_TWEAK_DEFAULTS || { theme: "paper", density: "comfortable", motion: "full" };
+const savedTheme = ["paper", "mono", "night"].includes(stored.theme) ? stored.theme : defaults.theme;
+
+function todayInShanghai() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function formatChineseDate(value) {
+  const [year, month, day] = String(value || "").split("-").map(Number);
+  return year && month && day ? `${year} 年 ${month} 月 ${day} 日` : "未填写";
+}
+
+function defaultAnswers() {
+  return {
+    location: "",
+    budgetMin: "",
+    budgetMax: "",
+    moveInFrom: "",
+    moveInTo: "",
+    commute: "35",
+    roommate: "any",
+    bathroom: "any",
+    elevator: "any",
+    utilities: "any",
+    kitchen: "any",
+    washer: "any"
+  };
+}
 
 let state = {
   mode: "renter",
@@ -68,14 +97,10 @@ let state = {
   renterStage: "input",
   supplyStage: "draft",
   page: "root",
-  draftText: exampleDemands.commute,
+  draftText: "",
+  parsedDemand: null,
   listening: false,
-  answers: {
-    roommate: "female",
-    bathroom: "preferred",
-    elevator: "preferred",
-    utilities: "residential"
-  },
+  answers: defaultAnswers(),
   consent: false,
   supplyPledge: false,
   supplyDraft: structuredClone(demoSupplyDraft),
@@ -89,13 +114,14 @@ let state = {
   reportResult: null,
   regression: null,
   toast: null,
-  theme: stored.theme || defaults.theme,
+  theme: savedTheme,
   density: stored.density || defaults.density,
   motion: stored.motion || defaults.motion
 };
 
 let toastTimer = null;
 let lastViewKey = null;
+let voiceRecognition = null;
 
 function persistTweaks() {
   localStorage.setItem(
@@ -104,16 +130,75 @@ function persistTweaks() {
   );
 }
 
+function seedAnswersFromParsed(parsed) {
+  const fields = parsed?.fields;
+  if (!fields) return;
+  if (fields.locations.length) state.answers.location = fields.locations.join(" / ");
+  if (fields.budget?.target) state.answers.budgetMin = String(fields.budget.target);
+  if (fields.budget?.hardMax) state.answers.budgetMax = String(fields.budget.hardMax);
+  if (fields.moveInWindow?.from) state.answers.moveInFrom = fields.moveInWindow.from;
+  if (fields.moveInWindow?.to) state.answers.moveInTo = fields.moveInWindow.to;
+  if (fields.maxCommuteMinutes) state.answers.commute = String(fields.maxCommuteMinutes);
+  if (fields.sharedHousing === false) state.answers.roommate = "no_share";
+  if (fields.sharedHousing === true) state.answers.roommate = fields.roommateGender || "any";
+  if (fields.preferences.ensuite) state.answers.bathroom = fields.preferences.ensuite;
+  if (fields.preferences.elevator) state.answers.elevator = fields.preferences.elevator;
+  if (fields.preferences.utilities) state.answers.utilities = fields.preferences.utilities;
+  if (fields.facilities.kitchen !== null) state.answers.kitchen = fields.facilities.kitchen ? "required" : "any";
+  if (fields.facilities.washer !== null) state.answers.washer = fields.facilities.washer ? "required" : "any";
+}
+
 function mandateFromAnswers() {
   const mandate = structuredClone(baseMandate);
-  mandate.roommateGender = state.answers.roommate === "female" ? "female" : null;
-  mandate.sharedHousing = state.answers.roommate !== "no_share";
+  const parsed = state.parsedDemand?.fields;
+  const typedLocations = state.answers.location
+    .split(/(?:、|\/|，|,)/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const targetBudget = parsed?.budget?.target || Number(state.answers.budgetMin);
+  const hardMax = parsed?.budget?.hardMax || Number(state.answers.budgetMax);
+  mandate.city = parsed?.city || "上海";
+  mandate.locations = parsed?.locations?.length ? [...parsed.locations] : typedLocations;
+  mandate.maxCommuteMinutes = parsed?.maxCommuteMinutes || Number(state.answers.commute);
+  mandate.budget.target = targetBudget;
+  mandate.budget.hardMax = hardMax;
+  mandate.moveInWindow = structuredClone(parsed?.moveInWindow || {
+    from: state.answers.moveInFrom,
+    to: state.answers.moveInTo,
+    label: ""
+  });
+  mandate.roommateGender = parsed?.roommateGender || (["female", "male"].includes(state.answers.roommate) ? state.answers.roommate : null);
+  mandate.sharedHousing = parsed?.sharedHousing ?? state.answers.roommate !== "no_share";
   mandate.hardConstraints.ensuite = state.answers.bathroom === "required";
   mandate.hardConstraints.elevator = state.answers.elevator === "required";
+  mandate.hardConstraints.kitchen = parsed?.facilities?.kitchen ?? state.answers.kitchen === "required";
+  mandate.hardConstraints.washer = parsed?.facilities?.washer ?? state.answers.washer === "required";
   mandate.preferences.ensuite = state.answers.bathroom;
   mandate.preferences.elevator = state.answers.elevator;
   mandate.preferences.utilities = state.answers.utilities;
+  if (parsed?.preferences?.washerType) mandate.preferences.washerType = `${parsed.preferences.washerType}_preferred`;
+  if (parsed?.preferences?.exposure) mandate.preferences.exposure = `${parsed.preferences.exposure}_preferred`;
   return mandate;
+}
+
+function validateDemandAnswers() {
+  const parsed = state.parsedDemand?.fields;
+  const locations = parsed?.locations?.length ? parsed.locations : state.answers.location.trim();
+  if (!locations.length) return "请填写想住的位置";
+
+  const budgetMin = parsed?.budget?.target || Number(state.answers.budgetMin);
+  const budgetMax = parsed?.budget?.hardMax || Number(state.answers.budgetMax);
+  if (!budgetMin || !budgetMax) return "请填写月租范围";
+  if (budgetMin < 500 || budgetMax < budgetMin) return "月租范围需要从低到高";
+
+  const moveInFrom = parsed?.moveInWindow?.from || state.answers.moveInFrom;
+  const moveInTo = parsed?.moveInWindow?.to || state.answers.moveInTo;
+  if (!moveInFrom || !moveInTo) return "请填写入住日期范围";
+  if (moveInTo < moveInFrom) return "最晚入住日期不能早于最早日期";
+
+  const commute = parsed?.maxCommuteMinutes || Number(state.answers.commute);
+  if (commute < 15 || commute > 60) return "通勤时间需在 15 到 60 分钟之间";
+  return null;
 }
 
 function applyTweaks() {
@@ -136,6 +221,41 @@ function showToast(message) {
   }, 2200);
 }
 
+function startVoiceInput() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    app.querySelector("#demand-input")?.focus();
+    showToast("当前浏览器暂不支持语音输入");
+    return;
+  }
+
+  voiceRecognition?.stop();
+  voiceRecognition = new Recognition();
+  voiceRecognition.lang = "zh-CN";
+  voiceRecognition.interimResults = false;
+  voiceRecognition.continuous = false;
+  state.listening = true;
+  render();
+
+  voiceRecognition.onresult = (event) => {
+    const transcript = [...event.results].map((result) => result[0]?.transcript || "").join("");
+    if (transcript) state.draftText = transcript;
+    state.parsedDemand = null;
+    state.listening = false;
+    render();
+  };
+  voiceRecognition.onerror = () => {
+    state.listening = false;
+    showToast("没有听清，再试一次");
+  };
+  voiceRecognition.onend = () => {
+    if (!state.listening) return;
+    state.listening = false;
+    render();
+  };
+  voiceRecognition.start();
+}
+
 function statusBar() {
   return `
     <div class="status-bar" aria-hidden="true">
@@ -152,17 +272,14 @@ function topArea() {
   return `
     <header class="top-area">
       <div class="brand-row">
-        <div class="brand-lockup">
-          <p class="brand-name">栖合</p>
-          <span class="beta-label">simulation</span>
-        </div>
-        <button class="icon-button" data-action="open-lab" aria-label="打开模拟测试台">
+        <p class="brand-name">栖合</p>
+        <button class="icon-button lab-entry" data-action="open-lab" aria-label="打开测试台">
           ${icon("lab")}
         </button>
       </div>
       <div class="intent-switch" role="tablist" aria-label="切换租房意图">
-        <button role="tab" aria-selected="${state.mode === "renter"}" data-action="switch-mode" data-value="renter">我要找房</button>
-        <button role="tab" aria-selected="${state.mode === "supply"}" data-action="switch-mode" data-value="supply">我要出租</button>
+        <button role="tab" aria-selected="${state.mode === "renter"}" data-action="switch-mode" data-value="renter">找房</button>
+        <button role="tab" aria-selected="${state.mode === "supply"}" data-action="switch-mode" data-value="supply">出租</button>
       </div>
     </header>`;
 }
@@ -191,145 +308,145 @@ function tabBar() {
 
 function renterInput() {
   return `
-    <section class="screen-enter">
-      <div class="hero">
-        <div class="eyebrow">把找房变成一份委托</div>
-        <h1>说清需求，<br />剩下交给 AI。</h1>
-        <p>你不用刷帖子，也不用反复解释。AI 会补全需求、核验房源并在授权范围内协商。</p>
-        <div class="trust-line"><span class="trust-mark">${icon("shield")}</span>只匹配房东本人和当前承租人</div>
+    <section class="screen-enter home-landing">
+      <div class="home-intro">
+        <h1>你想住哪儿？</h1>
       </div>
 
-      <div class="composer">
-        <label for="demand-input">先随便说，不用一次讲完整</label>
-        <textarea id="demand-input" data-input="draft-text" placeholder="例如：静安寺附近，预算 3000，9 月入住……">${escapeHtml(state.draftText)}</textarea>
+      <div class="composer" data-state="${state.draftText.trim() ? "ready" : "empty"}">
+        <textarea id="demand-input" data-input="draft-text" aria-label="输入找房需求" placeholder="输入找房需求">${escapeHtml(state.draftText)}</textarea>
         <div class="composer-actions">
-          <button class="voice-button ${state.listening ? "is-listening" : ""}" data-action="simulate-voice" aria-label="模拟语音输入">
+          <button class="voice-button ${state.listening ? "is-listening" : ""}" data-action="voice-input" aria-label="语音输入">
             ${icon("mic")}
           </button>
-          <button class="primary-button" data-action="start-intake">让 AI 帮我补全 ${icon("arrow")}</button>
+          <span class="composer-spacer"></span>
+          <button class="composer-submit" data-action="start-intake" aria-label="继续">${icon("arrow")}</button>
         </div>
       </div>
-
-      <div class="sample-strip" aria-label="示例需求">
-        <button class="sample-chip" data-action="sample-demand" data-value="commute">通勤优先示例</button>
-        <button class="sample-chip" data-action="sample-demand" data-value="quiet">居住品质示例</button>
-        <button class="sample-chip" data-action="sample-demand" data-value="value">预算优先示例</button>
-      </div>
-
-      <section class="section">
-        <div class="section-header"><h2>AI 会替你做什么</h2><p>搜索阶段无需真人聊天</p></div>
-        <div class="summary-card">
-          <div class="fact-row"><span class="fact-label">补全需求</span><span class="fact-value">只追问关键缺口</span></div>
-          <div class="fact-row"><span class="fact-label">核验供给</span><span class="fact-value">角色、权利、现场、费用</span></div>
-          <div class="fact-row"><span class="fact-label">异步协商</span><span class="fact-value">不泄露私密底线</span></div>
-          <div class="fact-row"><span class="fact-label">交付结果</span><span class="fact-value">最多 3 套，不凑数</span></div>
-        </div>
-      </section>
     </section>`;
 }
 
 function answerChip(key, value, label) {
-  return `<button class="choice-chip" data-action="set-answer" data-key="${key}" data-value="${value}" aria-pressed="${state.answers[key] === value}">${label}</button>`;
+  return `<button class="choice-chip" data-action="set-answer" data-key="${key}" data-value="${value}" aria-pressed="${String(state.answers[key]) === String(value)}">${label}</button>`;
+}
+
+function coreQuestionCard(key, index) {
+  const number = String(index + 1).padStart(2, "0");
+  const today = todayInShanghai();
+  const controls = {
+    location: {
+      title: "想住在哪一带？",
+      body: `<label class="single-input-shell"><span>${icon("compass")}</span><input type="search" autocomplete="off" data-input="answer-location" aria-label="地铁站、商圈或地址" placeholder="地铁站、商圈或地址" value="${escapeHtml(state.answers.location)}" /></label>`
+    },
+    budget: {
+      title: "月租控制在多少？",
+      body: `<div class="paired-inputs budget-inputs">
+        <label><span>理想</span><div class="number-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-min" aria-label="理想月租" placeholder="3000" value="${escapeHtml(state.answers.budgetMin)}" /></div></label>
+        <span class="range-separator">—</span>
+        <label><span>最高</span><div class="number-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-max" aria-label="最高月租" placeholder="4000" value="${escapeHtml(state.answers.budgetMax)}" /></div></label>
+      </div>`
+    },
+    moveIn: {
+      title: "什么时候入住？",
+      body: `<div class="paired-inputs date-inputs">
+        <label><span>最早</span><input type="date" min="${today}" data-input="move-in-from" aria-label="最早入住日期" value="${escapeHtml(state.answers.moveInFrom)}" /></label>
+        <span class="range-separator">—</span>
+        <label><span>最晚</span><input type="date" min="${escapeHtml(state.answers.moveInFrom || today)}" data-input="move-in-to" aria-label="最晚入住日期" value="${escapeHtml(state.answers.moveInTo)}" /></label>
+      </div>`
+    },
+    housing: {
+      title: "整租还是合租？",
+      body: `<div class="choice-row">${answerChip("roommate", "no_share", "整租")}${answerChip("roommate", "female", "女生合租")}${answerChip("roommate", "male", "男生合租")}${answerChip("roommate", "any", "都可以")}</div>`
+    },
+    commute: {
+      title: "最长能接受多久通勤？",
+      body: `<div class="commute-control">
+        <output id="commute-value" for="commute-range">${escapeHtml(state.answers.commute)} 分钟</output>
+        <input id="commute-range" type="range" min="15" max="60" step="5" data-input="commute-range" aria-label="最长通勤时间" value="${escapeHtml(state.answers.commute)}" />
+        <div class="range-bounds"><span>15 分钟</span><span>60 分钟</span></div>
+      </div>`
+    }
+  };
+  const control = controls[key];
+  return `<div class="question-card"><span class="question-number">${number}</span><h3>${control.title}</h3>${control.body}</div>`;
+}
+
+function preferenceRow(key) {
+  const rows = {
+    ensuite: ["独卫", answerChip("bathroom", "required", "必须") + answerChip("bathroom", "preferred", "优先") + answerChip("bathroom", "any", "不限")],
+    elevator: ["电梯", answerChip("elevator", "required", "必须") + answerChip("elevator", "preferred", "高楼要") + answerChip("elevator", "any", "不限")],
+    utilities: ["水电", answerChip("utilities", "residential", "民用") + answerChip("utilities", "known", "透明即可") + answerChip("utilities", "any", "不限")],
+    kitchen: ["厨房", answerChip("kitchen", "required", "需要") + answerChip("kitchen", "any", "不限")],
+    washer: ["洗衣机", answerChip("washer", "required", "需要") + answerChip("washer", "any", "不限")]
+  };
+  const [label, controls] = rows[key];
+  return `<div class="preference-row"><span>${label}</span><div class="mini-choice-row">${controls}</div></div>`;
 }
 
 function renterClarify() {
+  const parsed = state.parsedDemand || parseDemandText(state.draftText);
+  const tags = parsedDemandTags(parsed);
+  const missingCore = parsed.coreMissing;
+  const missingPreferences = parsed.preferenceMissing;
   return `
-    <section class="screen-enter">
-      <div class="progress-header">
-        <div class="step-kicker"><span>需求补全</span><span>1 / 3</span></div>
-        <div class="step-track"><span style="width:33%"></span></div>
-        <h1 class="page-title">还有 4 个关键点</h1>
-        <p class="page-subtitle">AI 已从你的描述里识别出位置、预算和入住时间。下面这些会直接影响是否匹配。</p>
-        <div class="analysis-strip">
-          <span class="meta-chip">静安寺周边</span><span class="meta-chip">目标 ¥3,000</span><span class="meta-chip">9 月初入住</span><span class="meta-chip">接受合租</span>
-        </div>
+    <section class="screen-enter intake-screen">
+      <div class="stage-nav"><button data-action="back-intake">${icon("back")} 修改原话</button><span></span></div>
+      <div class="intake-heading">
+        <h1>${missingCore.length ? "补充需求" : "居住偏好"}</h1>
+        ${tags.length ? `<div class="analysis-strip">${tags.map((tag) => `<span class="meta-chip">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}
       </div>
-
-      <div class="question-card">
-        <span class="question-number">01 · 硬性条件</span>
-        <h3>合租时，对室友性别的要求？</h3>
-        <p>不符合时会直接排除，不进入双方 AI 对话。</p>
-        <div class="choice-row">
-          ${answerChip("roommate", "female", "只接受女生室友")}
-          ${answerChip("roommate", "any", "都可以")}
-          ${answerChip("roommate", "no_share", "不接受合租")}
-        </div>
-      </div>
-
-      <div class="question-card">
-        <span class="question-number">02 · 加分偏好</span>
-        <h3>独立卫生间有多重要？</h3>
-        <div class="choice-row">
-          ${answerChip("bathroom", "required", "必须有")}
-          ${answerChip("bathroom", "preferred", "有最好")}
-          ${answerChip("bathroom", "any", "无所谓")}
-        </div>
-      </div>
-
-      <div class="question-card">
-        <span class="question-number">03 · 居住便利</span>
-        <h3>对电梯有什么要求？</h3>
-        <div class="choice-row">
-          ${answerChip("elevator", "required", "必须有")}
-          ${answerChip("elevator", "preferred", "高楼层要有")}
-          ${answerChip("elevator", "any", "无所谓")}
-        </div>
-      </div>
-
-      <div class="question-card">
-        <span class="question-number">04 · 费用透明</span>
-        <h3>水电计价偏好？</h3>
-        <div class="choice-row">
-          ${answerChip("utilities", "residential", "民水民电优先")}
-          ${answerChip("utilities", "known", "说清楚即可")}
-        </div>
-      </div>
-
+      ${missingCore.map(coreQuestionCard).join("")}
+      ${missingPreferences.length ? `<div class="preference-panel"><div class="compact-heading"><h2>居住偏好</h2></div>${missingPreferences.map(preferenceRow).join("")}</div>` : ""}
       <div class="sticky-action">
-        <button class="primary-button button-full" data-action="review-mandate">查看 AI 整理的委托 ${icon("arrow")}</button>
+        <button class="primary-button button-full" data-action="review-mandate">确认需求 ${icon("arrow")}</button>
       </div>
     </section>`;
 }
 
 function renterReview() {
-  const roommateLabel = state.answers.roommate === "female" ? "仅女生室友" : state.answers.roommate === "no_share" ? "不接受合租" : "不限";
-  const bathroomLabel = state.answers.bathroom === "required" ? "必须独卫" : state.answers.bathroom === "preferred" ? "独卫加分" : "不限";
+  const mandate = mandateFromAnswers();
+  const roommateLabel = !mandate.sharedHousing ? "整租" : mandate.roommateGender === "female" ? "女生合租" : mandate.roommateGender === "male" ? "男生合租" : "可合租";
+  const moveInLabel = mandate.moveInWindow.label || `${mandate.moveInWindow.from.slice(5).replace("-", ".")}—${mandate.moveInWindow.to.slice(5).replace("-", ".")}`;
+  const budgetLabel = mandate.budget.target === mandate.budget.hardMax
+    ? `¥${mandate.budget.target.toLocaleString("zh-CN")}`
+    : `¥${mandate.budget.target.toLocaleString("zh-CN")}—${mandate.budget.hardMax.toLocaleString("zh-CN")}`;
+  const mustHave = [
+    mandate.hardConstraints.kitchen ? "厨房" : null,
+    mandate.hardConstraints.washer ? "洗衣机" : null,
+    mandate.hardConstraints.ensuite ? "独卫" : null,
+    mandate.hardConstraints.elevator ? "电梯" : null
+  ].filter(Boolean);
   return `
-    <section class="screen-enter">
-      <div class="progress-header">
-        <div class="step-kicker"><span>确认委托</span><span>2 / 3</span></div>
-        <div class="step-track"><span style="width:66%"></span></div>
-        <h1 class="page-title">这是 AI 真正执行的版本</h1>
-        <p class="page-subtitle">原话不会直接拿去搜房。硬性条件、偏好和可协商项必须分开。</p>
-      </div>
+    <section class="screen-enter review-screen">
+      <div class="stage-nav"><button data-action="edit-mandate">${icon("back")} 返回修改</button><span></span></div>
+      <div class="review-heading"><h1>确认需求</h1></div>
 
-      <div class="summary-card">
+      <div class="summary-card mandate-sheet">
         <dl class="summary-list">
-          <div class="summary-row"><dt>区域</dt><dd>静安寺 / 江苏路 / 隆德路</dd></div>
-          <div class="summary-row"><dt>预算</dt><dd>目标 ¥3,000 · 最高私密</dd></div>
-          <div class="summary-row"><dt>入住</dt><dd>8 月 28 日—9 月 5 日</dd></div>
+          <div class="summary-row"><dt>区域</dt><dd>${mandate.locations.join(" / ")}</dd></div>
+          <div class="summary-row"><dt>预算</dt><dd>${budgetLabel} / 月</dd></div>
+          <div class="summary-row"><dt>入住</dt><dd>${moveInLabel}</dd></div>
+          <div class="summary-row"><dt>通勤</dt><dd>不超过 ${mandate.maxCommuteMinutes} 分钟</dd></div>
           <div class="summary-row"><dt>合租</dt><dd>${roommateLabel}</dd></div>
-          <div class="summary-row"><dt>卫生间</dt><dd>${bathroomLabel}</dd></div>
-          <div class="summary-row"><dt>必须有</dt><dd>厨房、洗衣机、零中介费</dd></div>
+          <div class="summary-row"><dt>必须有</dt><dd>${mustHave.length ? mustHave.join("、") : "无"}</dd></div>
         </dl>
       </div>
 
-      <div class="private-box">
-        <h3>${icon("lock")} 你的私密协商授权</h3>
+      <details class="private-box">
+        <summary><span>${icon("lock")} 议价范围（仅自己可见）</span></summary>
         <ul>
-          <li>目标 ¥3,000；AI 可在不披露上限的前提下协商。</li>
-          <li>可用 12 个月租期、提前起租交换降价。</li>
-          <li>任何结果都是非约束意向，未经本人确认不生效。</li>
+          <li>目标 ¥${mandate.budget.target.toLocaleString("zh-CN")}</li>
+          <li>最高 ¥${mandate.budget.hardMax.toLocaleString("zh-CN")}</li>
         </ul>
-      </div>
+      </details>
 
       <label class="consent-row">
         <input type="checkbox" data-action="toggle-consent" ${state.consent ? "checked" : ""} />
-        <span>我授权 AI 按以上边界搜索和协商；AI 不得擅自突破硬性条件，也不得代表我签约。</span>
+        <span>按以上条件寻找，结果由我确认</span>
       </label>
 
       <div class="sticky-action">
-        <button class="primary-button button-full" data-action="publish-mandate" ${state.consent ? "" : "disabled"}>确认委托，开始寻找 ${icon("compass")}</button>
+        <button class="primary-button button-full" data-action="publish-mandate" ${state.consent ? "" : "disabled"}>开始找房 ${icon("arrow")}</button>
       </div>
     </section>`;
 }
@@ -340,30 +457,38 @@ function renterHome() {
   return renterInput();
 }
 
-function candidateCard(candidate) {
+function roomVisualClass(listingId) {
+  if (["home-nanyang", "home-longde"].includes(listingId)) return "room-1";
+  if (["home-jiangsu", "home-unknown-utilities"].includes(listingId)) return "room-2";
+  return "room-3";
+}
+
+function selectionTitle(label) {
+  return ({ "综合最合适": "首选", "预算最轻": "省预算", "居住条件最好": "住得好" })[label] || label;
+}
+
+function candidateCard(candidate, index) {
   const listing = candidate.listing;
-  const firstCaveat = candidate.caveats[0] || "暂无明显冲突";
+  const firstCaveat = candidate.caveats[0] || "无明显冲突";
   return `
     <article class="candidate-card">
-      <div class="property-photo tone-${listing.photoTone}">
-        <span class="selection-badge">${candidate.selectionLabel}</span>
-        <span class="photo-badge">模拟照片 · ${listing.photoLabel}</span>
-      </div>
-      <div class="candidate-body">
-        <div class="candidate-title-row">
-          <div>
-            <h3>${listing.shortTitle}</h3>
-            <p class="candidate-meta"><span>${listing.station} ${listing.walkMinutes} 分钟</span><span>通勤 ${listing.commuteMinutes} 分钟</span></p>
+      <button class="candidate-card-button" data-action="open-candidate" data-id="${listing.id}" aria-label="查看 ${listing.shortTitle}">
+        <div class="property-photo ${roomVisualClass(listing.id)}">
+          <span class="card-index">${String(index + 1).padStart(2, "0")}</span>
+          <span class="selection-badge">${selectionTitle(candidate.selectionLabel)}</span>
+        </div>
+        <div class="candidate-body">
+          <div class="candidate-title-row">
+            <div><h3>${listing.shortTitle}</h3><p>${listing.station} · 步行 ${listing.walkMinutes} 分钟</p></div>
+            <div class="rent">¥${candidate.agreedRent.toLocaleString("zh-CN")}<small>/月</small></div>
           </div>
-          <div class="rent">¥${candidate.agreedRent.toLocaleString("zh-CN")}<small>/月</small></div>
+          <div class="fact-chips"><span>通勤 ${listing.commuteMinutes} 分钟</span><span>${listing.room.areaSqm}㎡</span><span>${listing.room.roommateCount} 位室友</span></div>
+          <div class="candidate-footer">
+            <span class="caveat-line">${firstCaveat}</span>
+            <span class="card-open">已核验 ${icon("arrow")}</span>
+          </div>
         </div>
-        <div class="fit-line"><strong>为什么给你看：</strong>${candidate.reasons[0]}</div>
-        <div class="caveat-line"><strong>先看缺点：</strong>${firstCaveat}</div>
-        <div class="candidate-footer">
-          <span class="proof-inline">${icon("shield")} 四项核验完成</span>
-          <button class="secondary-button button-compact" data-action="open-candidate" data-id="${listing.id}">查看依据 ${icon("arrow")}</button>
-        </div>
-      </div>
+      </button>
     </article>`;
 }
 
@@ -374,7 +499,6 @@ function renterProgress() {
         <div class="empty-card">
           <div class="empty-symbol">${icon("compass")}</div>
           <h2>还没有运行中的委托</h2>
-          <p>创建委托后，AI 的筛选、核验和协商进展都会出现在这里。</p>
           <button class="primary-button" data-action="go-create">创建找房委托</button>
         </div>
       </section>`;
@@ -385,32 +509,30 @@ function renterProgress() {
   return `
     <section class="screen-enter">
       <div class="result-hero">
-        <div class="eyebrow">委托仍在后台运行</div>
-        <h1>${hasCandidates ? `AI 已替你挑出 ${result.candidates.length} 套` : "这一轮没有硬凑候选"}</h1>
-        <p>${hasCandidates ? "以下信息已按你的需求重新整理，不是照搬出租方文案。" : "所有房源都触发了硬性冲突、预算边界或风控规则。"}</p>
+        <div class="result-state">${hasCandidates ? "持续寻找中" : "本轮已完成"}</div>
+        <h1>${hasCandidates ? `找到 ${result.candidates.length} 套` : "暂时没有合适的"}</h1>
         <div class="result-stats">
-          <div class="result-stat"><strong>${result.scanned}</strong><span>本轮扫描</span></div>
-          <div class="result-stat"><strong>${result.excludedCount}</strong><span>条件排除</span></div>
-          <div class="result-stat"><strong>${result.quarantinedCount}</strong><span>风控隔离</span></div>
+          <div class="result-stat"><strong>${result.scanned}</strong><span>看过</span></div>
+          <div class="result-stat"><strong>${result.excludedCount}</strong><span>不合适</span></div>
+          <div class="result-stat"><strong>${result.quarantinedCount}</strong><span>已隔离</span></div>
         </div>
       </div>
 
       <button class="audit-summary-button" data-action="open-audit">
         <span class="audit-icon">${icon("list")}</span>
-        <span><strong>查看 AI 完整工作记录</strong><small>展示事实、报价和决策；不展示隐藏推理</small></span>
+        <span><strong>筛选记录</strong><small>${result.scanned} 套房源 · ${result.audit.length} 条事件</small></span>
         ${icon("arrow")}
       </button>
 
       ${hasCandidates ? `
         <section class="section">
-          <div class="section-header"><h2>交付给你的候选</h2><p>已去重 · 最多 3 套</p></div>
+          <div class="section-header"><h2>候选</h2><p>${result.finishedAt ? "刚刚更新" : ""}</p></div>
           ${result.candidates.map(candidateCard).join("")}
         </section>` : `
         <div class="empty-card">
           <div class="empty-symbol">${icon("shield")}</div>
-          <h2>AI 没有放宽你的底线</h2>
-          <p>你可以修改委托，或在测试台切换场景，观察不同冲突如何被处理。</p>
-          <button class="secondary-button" data-action="edit-mandate">修改委托</button>
+          <h2>暂时没有匹配</h2>
+          <button class="secondary-button" data-action="edit-mandate">修改需求</button>
         </div>`}
     </section>`;
 }
@@ -430,40 +552,39 @@ function candidateDetail() {
   if (!candidate) return auditPage();
   const listing = candidate.listing;
   return `
-    <section class="screen-enter">
-      <div class="detail-topbar">
+    <section class="screen-enter detail-screen">
+      <div class="detail-topbar floating-topbar">
         <button class="icon-button" data-action="back-root" aria-label="返回候选列表">${icon("back")}</button>
-        <h1>候选详情</h1>
+        <h1>${selectionTitle(candidate.selectionLabel)}</h1>
         <button class="icon-button" data-action="open-report" aria-label="举报此房源">${icon("report")}</button>
       </div>
-      <div class="property-photo detail-photo tone-${listing.photoTone}">
-        <span class="selection-badge">${candidate.selectionLabel} · ${candidate.score}% 匹配</span>
-        <span class="photo-badge">模拟照片 · ${listing.photoLabel}</span>
-      </div>
+      <div class="property-photo detail-photo ${roomVisualClass(listing.id)}"><span class="detail-photo-mark">${listing.publisher}</span></div>
       <div class="detail-content">
         <div class="detail-title-row">
           <h2 class="detail-title">${listing.shortTitle}</h2>
-          <div class="detail-rent">¥${candidate.agreedRent.toLocaleString("zh-CN")}</div>
+          <div class="detail-rent">¥${candidate.agreedRent.toLocaleString("zh-CN")}<small>/月</small></div>
         </div>
-        <p class="candidate-meta"><span>${listing.station}步行 ${listing.walkMinutes} 分钟</span><span>预计通勤 ${listing.commuteMinutes} 分钟</span></p>
+        <p class="candidate-meta"><span>${listing.station} · 步行 ${listing.walkMinutes} 分钟</span><span>通勤 ${listing.commuteMinutes} 分钟</span></p>
+        <div class="fact-chips detail-facts"><span>${listing.room.areaSqm}㎡</span><span>${listing.room.floor}/${listing.room.totalFloors} 层</span><span>${listing.room.roommateCount} 位室友</span></div>
 
         <div class="agreement-ticket">
-          <strong>双方 AI 已形成非约束性意向</strong>
-          <p>${candidate.agreementLabel || `当前意向价 ¥${candidate.agreedRent.toLocaleString("zh-CN")}/月`}。进入人工确认前，不会开放真人聊天。</p>
+          <span>当前意向</span>
+          <strong>¥${candidate.agreedRent.toLocaleString("zh-CN")} / 月</strong>
+          <p>${candidate.agreementLabel || "等待双方本人确认"}</p>
         </div>
 
         <section class="section">
-          <div class="section-header"><h2>为什么适合你</h2><p>${candidate.score}%</p></div>
+          <div class="section-header"><h2>符合</h2><p>${candidate.score}%</p></div>
           <ul class="plain-list positive">${candidate.reasons.map((reason) => `<li>${reason}</li>`).join("")}</ul>
         </section>
 
         <section class="section">
-          <div class="section-header"><h2>先把缺点说清楚</h2><p>${candidate.caveats.length} 项</p></div>
-          <ul class="plain-list warning">${candidate.caveats.map((reason) => `<li>${reason}</li>`).join("") || "<li>暂无已知冲突，仍需现场核验。</li>"}</ul>
+          <div class="section-header"><h2>留意</h2><p>${candidate.caveats.length} 项</p></div>
+          <ul class="plain-list warning">${candidate.caveats.map((reason) => `<li>${reason}</li>`).join("") || "<li>仍需现场确认。</li>"}</ul>
         </section>
 
         <section class="section">
-          <div class="section-header"><h2>每条信息从哪来</h2><p>可追溯</p></div>
+          <div class="section-header"><h2>来源</h2><p>已核验</p></div>
           <div class="summary-card">
             ${candidate.provenance.map((item) => `
               <div class="fact-row">
@@ -474,7 +595,7 @@ function candidateDetail() {
         </section>
 
         <section class="section">
-          <div class="section-header"><h2>双方 AI 怎么谈的</h2><p>可审计事件</p></div>
+          <div class="section-header"><h2>协商记录</h2><p>${candidate.negotiation.publicEvents.length} 条</p></div>
           <div class="timeline">
             ${candidate.negotiation.publicEvents.map((event) => `
               <div class="timeline-item">
@@ -482,11 +603,10 @@ function candidateDetail() {
                 <div class="timeline-copy"><strong>${event.title}</strong><span>${event.detail}</span><small>${event.actor}</small></div>
               </div>`).join("")}
           </div>
-          <div class="nonbinding-note">这里展示的是双方实际交换的事实、报价与条件，不展示模型的隐藏思维，也不会泄露对方的保留价或你的私密预算上限。</div>
         </section>
 
-        <button class="primary-button button-full" data-action="confirm-candidate">愿意进一步确认</button>
-        <button class="report-link" data-action="open-report">信息不实或怀疑中介？立即举报</button>
+        <button class="primary-button button-full" data-action="confirm-candidate">申请联系</button>
+        <button class="report-link" data-action="open-report">举报房源</button>
       </div>
     </section>`;
 }
@@ -497,14 +617,10 @@ function auditPage() {
     <section class="screen-enter">
       <div class="detail-topbar">
         <button class="icon-button" data-action="back-root" aria-label="返回进展">${icon("back")}</button>
-        <h1>AI 工作记录</h1>
+        <h1>筛选记录</h1>
         <span></span>
       </div>
-      <div class="progress-header">
-        <div class="eyebrow">结构化事件日志</div>
-        <h1 class="page-title">每一步都能追溯</h1>
-        <p class="page-subtitle">你看到的是输入、输出、报价和规则命中，不是不可验证的“AI 内心独白”。</p>
-      </div>
+      <div class="progress-header"><div class="eyebrow">${result?.scanned || 0} 套房源</div><h1 class="page-title">怎么筛出来的</h1></div>
       <div class="audit-card">
         ${(result?.audit || []).map((event) => `
           <article class="audit-event">
@@ -512,13 +628,7 @@ function auditPage() {
             <p>${event.detail}</p>
           </article>`).join("") || "<p>暂无记录。</p>"}
       </div>
-      ${result?.quarantinedCount ? `<div class="risk-banner"><strong>已自动隔离 ${result.quarantinedCount} 套风险房源。</strong><br />隔离后不再进入任何新匹配；客观证据确认中介伪装或收费后，将执行实名主体永久封禁。</div>` : ""}
-      <section class="section">
-        <div class="policy-card">
-          <h3>${icon("eye")} 可见性边界</h3>
-          <p>你能看到对方真实发出的报价与条件。你看不到对方私密底价；对方也看不到你的最高预算。最终结果必须由双方本人确认。</p>
-        </div>
-      </section>
+      ${result?.quarantinedCount ? `<div class="risk-banner"><strong>${result.quarantinedCount} 套风险房源已隔离；证据确认后封禁实名主体</strong></div>` : ""}
     </section>`;
 }
 
@@ -527,18 +637,14 @@ function supplyDraftScreen() {
   return `
     <section class="screen-enter">
       <div class="hero">
-        <div class="eyebrow">发布的不是广告，是可核验供给</div>
-        <h1>先证明你有权出租。</h1>
-        <p>只有房东本人直租和当前承租人个人转租能进入匹配。任何中介、代发或收费服务都不接受。</p>
+        <h1>发布房源</h1>
       </div>
 
-      <div class="risk-banner"><strong>零中介准入：</strong>中介费、服务费、信息费、带看费、签约费任一项大于 0，都无法发布。</div>
-
       <section class="section">
-        <span class="field-label">你的发布角色</span>
+        <span class="field-label">发布身份</span>
         <div class="role-options">
-          <button class="role-option" data-action="set-supply-role" data-value="landlord" aria-pressed="${draft.role === "landlord"}"><strong>房东本人</strong><small>产权人或共同产权人直接出租</small></button>
-          <button class="role-option" data-action="set-supply-role" data-value="subletter" aria-pressed="${draft.role === "subletter"}"><strong>当前承租人</strong><small>本人在租合同内的个人转租</small></button>
+          <button class="role-option" data-action="set-supply-role" data-value="landlord" aria-pressed="${draft.role === "landlord"}"><strong>房东本人</strong></button>
+          <button class="role-option" data-action="set-supply-role" data-value="subletter" aria-pressed="${draft.role === "subletter"}"><strong>当前租客</strong></button>
         </div>
       </section>
 
@@ -549,18 +655,22 @@ function supplyDraftScreen() {
             <input id="supply-title" class="text-field" data-input="supply-title" value="${escapeHtml(draft.title)}" />
           </div>
           <div class="field-group">
-            <label for="supply-address">完整地址 <span class="source-badge verified">仅平台核验可见</span></label>
+            <label for="supply-address">完整地址（仅用于核验）</label>
             <textarea id="supply-address" class="text-field" data-input="supply-address">${escapeHtml(draft.address)}</textarea>
           </div>
           <div class="field-group">
             <label for="supply-rent">挂牌月租</label>
             <input id="supply-rent" class="text-field" inputmode="numeric" data-input="supply-rent" value="${draft.listedRent}" />
           </div>
+          <div class="field-group">
+            <label for="supply-available">可入住日期</label>
+            <input id="supply-available" class="text-field" type="date" min="${todayInShanghai()}" data-input="supply-available" value="${escapeHtml(draft.availableFrom)}" />
+          </div>
         </div>
       </section>
 
       <section class="section">
-        <div class="section-header"><h2>现场随机拍摄</h2><p>防盗图与过期</p></div>
+        <div class="section-header"><h2>现场拍摄</h2></div>
         <div class="photo-challenge">
           <div class="photo-tile done">${icon("camera")}卧室 + 指定手势</div>
           <div class="photo-tile done">${icon("camera")}窗外 + 当日码</div>
@@ -569,7 +679,7 @@ function supplyDraftScreen() {
       </section>
 
       <section class="section">
-        <div class="section-header"><h2>费用必须逐项写清</h2><p>不可打包模糊</p></div>
+        <div class="section-header"><h2>费用</h2></div>
         <div class="summary-card">
           <div class="fee-row"><span class="fee-label">租金</span><span class="fee-value">¥${draft.listedRent}/月</span></div>
           <div class="fee-row"><span class="fee-label">押金</span><span class="fee-value">¥${draft.fees.deposit}</span></div>
@@ -579,7 +689,7 @@ function supplyDraftScreen() {
       </section>
 
       <div class="sticky-action">
-        <button class="primary-button button-full" data-action="scan-supply">让 AI 检查完整度 ${icon("spark")}</button>
+        <button class="primary-button button-full" data-action="scan-supply">检查并继续 ${icon("arrow")}</button>
       </div>
     </section>`;
 }
@@ -589,22 +699,19 @@ function supplyReviewScreen() {
   return `
     <section class="screen-enter">
       <div class="progress-header">
-        <div class="step-kicker"><span>供给核验</span><span>2 / 3</span></div>
-        <div class="step-track"><span style="width:66%"></span></div>
-        <h1 class="page-title">AI 已整理成标准房源</h1>
-        <p class="page-subtitle">出租方原文不会直接展示给租户；系统会按每位租户的委托重新组织事实。</p>
+        <h1 class="page-title">确认房源</h1>
       </div>
 
       <div class="verification-grid">
-        <div class="verification-item">身份一致<small>实名与活体核验</small></div>
-        <div class="verification-item">角色一致<small>${state.supplyDraft.role === "landlord" ? "产权人本人" : "现租客本人"}</small></div>
-        <div class="verification-item">权利一致<small>产权或在租合同</small></div>
-        <div class="verification-item">现场一致<small>随机拍摄挑战</small></div>
+        <div class="verification-item">${icon("check")}<span>身份</span></div>
+        <div class="verification-item">${icon("check")}<span>${state.supplyDraft.role === "landlord" ? "房东本人" : "当前租客"}</span></div>
+        <div class="verification-item">${icon("check")}<span>出租权</span></div>
+        <div class="verification-item">${icon("check")}<span>现场</span></div>
       </div>
 
       <section class="section">
         <div class="summary-card">
-          <div class="summary-row"><span class="fact-label">可入住</span><span class="fact-value">2026 年 8 月 29 日</span></div>
+          <div class="summary-row"><span class="fact-label">可入住</span><span class="fact-value">${formatChineseDate(state.supplyDraft.availableFrom)}</span></div>
           <div class="summary-row"><span class="fact-label">挂牌租金</span><span class="fact-value">¥${state.supplyDraft.listedRent}/月</span></div>
           <div class="summary-row"><span class="fact-label">合租情况</span><span class="fact-value">2 位女生室友</span></div>
           <div class="summary-row"><span class="fact-label">基础设施</span><span class="fact-value">厨房、滚筒、电梯</span></div>
@@ -612,23 +719,22 @@ function supplyReviewScreen() {
         </div>
       </section>
 
-      <div class="private-box">
-        <h3>${icon("lock")} 出租方私密协商授权</h3>
+      <details class="private-box">
+        <summary><span>${icon("lock")} 议价范围（仅自己可见）</span></summary>
         <ul>
-          <li>挂牌 ¥3,200；AI 可直接接受 ¥3,100。</li>
-          <li>租满 12 个月且 9 月 1 日前起租，可接受 ¥3,000。</li>
-          <li>更低报价必须回来询问本人。</li>
+          <li>挂牌 ¥${state.supplyDraft.listedRent.toLocaleString("zh-CN")}</li>
+          <li>自动协商底价 ¥${state.supplyDraft.minimumAuthorizedRent.toLocaleString("zh-CN")}</li>
         </ul>
-      </div>
+      </details>
 
       ${validation.errors.length ? `<div class="risk-banner">${validation.errors.join("；")}</div>` : ""}
       <label class="consent-row">
         <input type="checkbox" data-action="toggle-supply-pledge" ${state.supplyPledge ? "checked" : ""} />
-        <span>我确认是房东本人或当前承租人，不收取中介费、服务费、信息费、带看费或签约费；故意虚假申报将被实名级永久封禁。</span>
+        <span>我是房东本人或当前租客，不收中介费或服务费。</span>
       </label>
 
       <div class="sticky-action">
-        <button class="primary-button button-full" data-action="publish-supply" ${state.supplyPledge && validation.valid ? "" : "disabled"}>通过核验并进入供给池</button>
+        <button class="primary-button button-full" data-action="publish-supply" ${state.supplyPledge && validation.valid ? "" : "disabled"}>发布房源</button>
       </div>
     </section>`;
 }
@@ -638,24 +744,17 @@ function supplyPublishedScreen() {
     <section class="screen-enter">
       <div class="success-seal">${icon("check")}</div>
       <div class="center-copy">
-        <h1>房源已进入供给池</h1>
-        <p>租户不会直接给你留言。只有满足硬条件的找房 AI 才能发起结构化询问和报价。</p>
+        <h1>已发布</h1>
       </div>
       <section class="section">
         <div class="summary-card">
           <div class="fact-row"><span class="fact-label">房源状态</span><span class="fact-value">等待匹配</span></div>
-          <div class="fact-row"><span class="fact-label">角色徽章</span><span class="fact-value">个人转租 · 已核验</span></div>
+          <div class="fact-row"><span class="fact-label">发布身份</span><span class="fact-value">${state.supplyDraft.role === "landlord" ? "房东本人" : "当前租客"} · 已核验</span></div>
           <div class="fact-row"><span class="fact-label">现场信息有效期</span><span class="fact-value">还剩 7 天</span></div>
-          <div class="fact-row"><span class="fact-label">真人聊天</span><span class="fact-value">双方确认后开放</span></div>
+          <div class="fact-row"><span class="fact-label">联系</span><span class="fact-value">双方确认后开放</span></div>
         </div>
       </section>
-      <section class="section">
-        <div class="policy-card">
-          <h3>接下来你不用守着消息</h3>
-          <p>出租 AI 会回答已声明事实，并在授权范围内报价。超出授权、材料变化或高风险问题才会回来找你。</p>
-        </div>
-      </section>
-      <button class="secondary-button button-full" data-action="reset-supply">再模拟一次发布</button>
+      <button class="secondary-button button-full" data-action="reset-supply">发布另一套</button>
     </section>`;
 }
 
@@ -671,8 +770,7 @@ function supplyProgress() {
       <section class="screen-enter">
         <div class="empty-card">
           <div class="empty-symbol">${icon("home")}</div>
-          <h2>房源还没进入供给池</h2>
-          <p>完成角色、出租权、现场和费用核验后，AI 才能代你接收匹配请求。</p>
+          <h2>房源还没发布</h2>
           <button class="primary-button" data-action="go-supply">去发布房源</button>
         </div>
       </section>`;
@@ -680,9 +778,8 @@ function supplyProgress() {
   return `
     <section class="screen-enter">
       <div class="result-hero">
-        <div class="eyebrow">出租 AI 正在工作</div>
+        <div class="result-state">持续匹配中</div>
         <h1>收到 7 份委托，2 份值得继续</h1>
-        <p>数字来自当前模拟场景：其余委托因预算、时间或室友条件冲突被自动拒绝。</p>
         <div class="result-stats">
           <div class="result-stat"><strong>7</strong><span>进入初筛</span></div>
           <div class="result-stat"><strong>5</strong><span>硬条件冲突</span></div>
@@ -690,9 +787,9 @@ function supplyProgress() {
         </div>
       </div>
       <div class="audit-card">
-        <article class="audit-event"><header><h3>租户 A · 报价 ¥3,000</h3><span class="actor">条件命中</span></header><p>12 个月租期，8 月 29 日起租；已按你的授权有条件接受。</p></article>
-        <article class="audit-event"><header><h3>租户 B · 询问是否可养猫</h3><span class="actor">等待本人</span></header><p>你的房源资料没有宠物规则，AI 不会自行承诺。</p></article>
-        <article class="audit-event"><header><h3>租户 C · 最高 ¥2,800</h3><span class="actor">自动拒绝</span></header><p>低于私密授权范围，没有继续暴露你的条件。</p></article>
+        <article class="audit-event"><header><h3>租户 A · 报价 ¥3,000</h3><span class="actor">条件命中</span></header><p>12 个月 · 8 月 29 日起租 · 已接受</p></article>
+        <article class="audit-event"><header><h3>租户 B · 询问是否可养猫</h3><span class="actor">等待本人</span></header><p>宠物规则未填写</p></article>
+        <article class="audit-event"><header><h3>租户 C · 最高 ¥2,800</h3><span class="actor">自动拒绝</span></header><p>低于自动协商底价</p></article>
       </div>
     </section>`;
 }
@@ -701,26 +798,24 @@ function profileScreen() {
   return `
     <section class="screen-enter">
       <div class="hero">
-        <div class="eyebrow">信任不是一个总分</div>
-        <h1>四件事，分别核验。</h1>
-        <p>身份、发布角色、出租权和现场真实性各自有来源。任何一项失效都不会继续沿用旧徽章。</p>
+        <h1>我的</h1>
       </div>
       <div class="verification-grid">
-        <div class="verification-item">身份<small>实名 + 活体</small></div>
-        <div class="verification-item">角色<small>房东 / 当前承租人</small></div>
-        <div class="verification-item">出租权<small>产权 / 在租合同</small></div>
-        <div class="verification-item">现场<small>随机拍摄 + 时效</small></div>
+        <div class="verification-item">${icon("check")}<span>身份</span></div>
+        <div class="verification-item">${icon("check")}<span>角色</span></div>
+        <div class="verification-item">${icon("check")}<span>出租权</span></div>
+        <div class="verification-item">${icon("check")}<span>现场</span></div>
       </div>
       <section class="section">
         <div class="policy-card">
-          <h3>对故意说假话，零次机会</h3>
-          <p>冒充个人、索取中介或服务费、伪造材料、盗图、绕过封禁：客观证据确认后，实名主体永久禁止再次发布。</p>
+          <h3>违规处理</h3>
+          <p>冒充个人、收费、伪造材料、盗图：永久封禁实名主体</p>
         </div>
       </section>
       <section class="section">
-        <div class="section-header"><h2>原型设置</h2><p>仅本地保存</p></div>
+        <div class="section-header"><h2>设置</h2></div>
         <div class="summary-card">
-          <div class="setting-row"><span class="fact-label">模拟测试台</span><button data-action="open-lab">打开</button></div>
+          <div class="setting-row"><span class="fact-label">测试台</span><button data-action="open-lab">打开</button></div>
           <div class="setting-row"><span class="fact-label">减少动态效果</span><button data-action="toggle-motion">${state.motion === "reduced" ? "已开启" : "未开启"}</button></div>
           <div class="setting-row"><span class="fact-label">重置所有流程</span><button data-action="reset-all">重置</button></div>
         </div>
@@ -741,7 +836,7 @@ function testLabSheet() {
       <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="lab-title" data-sheet-body>
         <div class="sheet-handle"></div>
         <header class="sheet-header">
-          <div><h2 id="lab-title">模拟测试台</h2><p>切换边界场景，直接观察产品如何处理；不调用真实 AI。</p></div>
+          <div><h2 id="lab-title">测试台</h2></div>
           <button class="icon-button" data-action="close-sheet" aria-label="关闭">${icon("close")}</button>
         </header>
 
@@ -749,22 +844,22 @@ function testLabSheet() {
           ${labScenarios.map((scenario, index) => `
             <button class="scenario-button" data-action="load-scenario" data-value="${scenario.id}" aria-current="${state.activeScenario === scenario.id}">
               <span class="scenario-index">0${index + 1}</span>
-              <span><strong>${scenario.name}</strong><small>${scenario.description}</small></span>
+              <span><strong>${scenario.name}</strong></span>
               ${icon("arrow")}
             </button>`).join("")}
         </div>
 
         <section class="section">
-          <div class="section-header"><h2>视觉方向</h2><p>三种可比较方案</p></div>
+          <div class="section-header"><h2>视觉</h2></div>
           <div class="theme-toggle">
-            <button data-action="set-theme" data-value="ledger" aria-pressed="${state.theme === "ledger"}">安心账本</button>
-            <button data-action="set-theme" data-value="neighbor" aria-pressed="${state.theme === "neighbor"}">邻里暖光</button>
-            <button data-action="set-theme" data-value="precision" aria-pressed="${state.theme === "precision"}">效率模式</button>
+            <button data-action="set-theme" data-value="paper" aria-pressed="${state.theme === "paper"}">白</button>
+            <button data-action="set-theme" data-value="mono" aria-pressed="${state.theme === "mono"}">高对比</button>
+            <button data-action="set-theme" data-value="night" aria-pressed="${state.theme === "night"}">夜间</button>
           </div>
         </section>
 
         <section class="section">
-          <div class="section-header"><h2>信息密度</h2><p>用于可读性测试</p></div>
+          <div class="section-header"><h2>信息密度</h2></div>
           <div class="density-toggle">
             <button data-action="set-density" data-value="compact" aria-pressed="${state.density === "compact"}">紧凑</button>
             <button data-action="set-density" data-value="comfortable" aria-pressed="${state.density === "comfortable"}">舒适</button>
@@ -773,9 +868,9 @@ function testLabSheet() {
         </section>
 
         <section class="section">
-          <div class="section-header"><h2>规则回归</h2><p>${state.regression ? `${passed}/${state.regression.length} 通过` : "13 个断言"}</p></div>
+          <div class="section-header"><h2>规则回归</h2>${state.regression ? `<span class="section-count">${passed}/${state.regression.length}</span>` : ""}</div>
           ${state.regression ? `<div class="regression-list">${state.regression.map((item) => `
-            <div class="regression-row"><span>${item.passed ? icon("check") : icon("close")}</span><span>${item.name}</span><span class="${item.passed ? "pass" : "fail"}">${item.passed ? "PASS" : "FAIL"}</span></div>`).join("")}</div>` : `<button class="secondary-button button-full" data-action="run-regression">运行全部模拟测试</button>`}
+            <div class="regression-row"><span>${item.passed ? icon("check") : icon("close")}</span><span>${item.name}</span><span class="${item.passed ? "pass" : "fail"}">${item.passed ? "PASS" : "FAIL"}</span></div>`).join("")}</div>` : `<button class="secondary-button button-full" data-action="run-regression">运行全部检查</button>`}
         </section>
       </section>
     </div>`;
@@ -787,7 +882,7 @@ function reportSheet() {
       <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="report-title" data-sheet-body>
         <div class="sheet-handle"></div>
         <header class="sheet-header">
-          <div><h2 id="report-title">举报房源</h2><p>提交后立即停止进入新匹配；不可逆封禁需要客观证据确认。</p></div>
+          <div><h2 id="report-title">举报房源</h2></div>
           <button class="icon-button" data-action="close-sheet" aria-label="关闭">${icon("close")}</button>
         </header>
         ${[
@@ -799,7 +894,7 @@ function reportSheet() {
 
         <label class="consent-row">
           <input type="checkbox" data-action="toggle-report-evidence" ${state.reportHasEvidence ? "checked" : ""} />
-          <span>模拟附上站内索取费用的完整对话（用于测试“客观证据命中”分支）</span>
+          <span>附上站内索取费用的完整对话</span>
         </label>
         <button class="danger-button button-full" data-action="submit-report">提交举报并立即隔离</button>
       </section>
@@ -814,7 +909,7 @@ function reportResultSheet() {
       <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="report-result-title" data-sheet-body>
         <div class="sheet-handle"></div>
         <header class="sheet-header">
-          <div><h2 id="report-result-title">举报处置结果</h2><p>模拟风控决定已写入审计事件。</p></div>
+          <div><h2 id="report-result-title">处理结果</h2></div>
           <button class="icon-button" data-action="close-sheet" aria-label="关闭">${icon("close")}</button>
         </header>
         <div class="report-result">
@@ -837,6 +932,7 @@ function activeSheet() {
 
 function render() {
   applyTweaks();
+  const previousScrollTop = app.querySelector("#app-main")?.scrollTop || 0;
   const immersive = state.page === "candidate" || state.page === "audit";
   const viewKey = [state.mode, state.tab, state.renterStage, state.supplyStage, state.page, state.activeCandidateId || "none"].join(":");
   const shouldResetScroll = viewKey !== lastViewKey;
@@ -854,10 +950,8 @@ function render() {
         ${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}
       </div>
     </div>`;
-  if (shouldResetScroll) {
-    const main = app.querySelector("#app-main");
-    if (main) main.scrollTop = 0;
-  }
+  const main = app.querySelector("#app-main");
+  if (main) main.scrollTop = shouldResetScroll ? 0 : previousScrollTop;
   lastViewKey = viewKey;
 }
 
@@ -872,8 +966,10 @@ function resetAll() {
     renterStage: "input",
     supplyStage: "draft",
     page: "root",
-    draftText: exampleDemands.commute,
-    answers: { roommate: "female", bathroom: "preferred", elevator: "preferred", utilities: "residential" },
+    draftText: "",
+    parsedDemand: null,
+    listening: false,
+    answers: defaultAnswers(),
     consent: false,
     supplyPledge: false,
     supplyDraft: structuredClone(demoSupplyDraft),
@@ -891,16 +987,60 @@ function resetAll() {
   render();
 }
 
+function beginIntake() {
+  if (!state.draftText.trim()) {
+    showToast("先输入找房需求");
+    return;
+  }
+  state.parsedDemand = parseDemandText(state.draftText);
+  state.answers = defaultAnswers();
+  seedAnswersFromParsed(state.parsedDemand);
+  state.consent = false;
+  state.renterStage = state.parsedDemand.coreMissing.length || state.parsedDemand.preferenceMissing.length ? "clarify" : "review";
+  render();
+}
+
 app.addEventListener("input", (event) => {
   const input = event.target.closest("[data-input]");
   if (!input) return;
-  if (input.dataset.input === "draft-text") state.draftText = input.value;
+  if (input.dataset.input === "draft-text") {
+    state.draftText = input.value;
+    state.parsedDemand = null;
+  }
+  if (input.dataset.input === "answer-location") state.answers.location = input.value;
+  if (input.dataset.input === "budget-min") state.answers.budgetMin = input.value;
+  if (input.dataset.input === "budget-max") state.answers.budgetMax = input.value;
+  if (input.dataset.input === "move-in-from") {
+    state.answers.moveInFrom = input.value;
+    const endInput = app.querySelector('[data-input="move-in-to"]');
+    if (endInput) {
+      endInput.min = input.value || todayInShanghai();
+      if (endInput.value && endInput.value < input.value) {
+        endInput.value = input.value;
+        state.answers.moveInTo = input.value;
+      }
+    }
+  }
+  if (input.dataset.input === "move-in-to") state.answers.moveInTo = input.value;
+  if (input.dataset.input === "commute-range") {
+    state.answers.commute = input.value;
+    const output = app.querySelector("#commute-value");
+    if (output) output.textContent = `${input.value} 分钟`;
+  }
   if (input.dataset.input === "supply-title") state.supplyDraft.title = input.value;
   if (input.dataset.input === "supply-address") state.supplyDraft.address = input.value;
+  if (input.dataset.input === "supply-available") state.supplyDraft.availableFrom = input.value;
   if (input.dataset.input === "supply-rent") {
     state.supplyDraft.listedRent = Number(input.value || 0);
     state.supplyDraft.fees.rent = Number(input.value || 0);
   }
+});
+
+app.addEventListener("keydown", (event) => {
+  const input = event.target.closest('[data-input="draft-text"]');
+  if (!input || event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  beginIntake();
 });
 
 app.addEventListener("click", (event) => {
@@ -924,49 +1064,44 @@ app.addEventListener("click", (event) => {
       state.page = "root";
       render();
       break;
-    case "sample-demand":
-      state.draftText = exampleDemands[value];
-      render();
-      break;
-    case "simulate-voice":
-      state.listening = true;
-      render();
-      setTimeout(() => {
-        state.listening = false;
-        state.draftText = exampleDemands.commute;
-        showToast("已转成文字，可继续修改");
-      }, 700);
+    case "voice-input":
+      startVoiceInput();
       break;
     case "start-intake":
-      if (!state.draftText.trim()) {
-        showToast("先说一点你的需求");
-      } else {
-        state.renterStage = "clarify";
-        render();
-      }
+      beginIntake();
+      break;
+    case "back-intake":
+      state.renterStage = "input";
+      render();
       break;
     case "set-answer":
       state.answers[target.dataset.key] = value;
       render();
       break;
-    case "review-mandate":
+    case "review-mandate": {
+      const validationError = validateDemandAnswers();
+      if (validationError) {
+        showToast(validationError);
+        break;
+      }
       state.renterStage = "review";
       render();
       break;
+    }
     case "toggle-consent":
       state.consent = target.checked;
-      render();
+      app.querySelector('[data-action="publish-mandate"]')?.toggleAttribute("disabled", !state.consent);
       break;
     case "publish-mandate": {
       if (!state.consent) {
-        showToast("请先确认 AI 的授权边界");
+        showToast("请先确认授权");
         break;
       }
       const { result } = runLabScenario(state.activeScenario, mandateFromAnswers());
       state.result = result;
       state.tab = "progress";
       state.page = "root";
-      showToast(result.candidates.length ? `AI 已交付 ${result.candidates.length} 套候选` : "本轮没有合适候选");
+      showToast(result.candidates.length ? `找到 ${result.candidates.length} 套` : "本轮没有合适房源");
       break;
     }
     case "go-create":
@@ -976,7 +1111,7 @@ app.addEventListener("click", (event) => {
       break;
     case "edit-mandate":
       state.tab = "mandate";
-      state.renterStage = "clarify";
+      state.renterStage = "input";
       state.page = "root";
       render();
       break;
@@ -994,7 +1129,7 @@ app.addEventListener("click", (event) => {
       render();
       break;
     case "confirm-candidate":
-      showToast("已请求双方本人确认，真人聊天仍未开放");
+      showToast("已向双方发出确认请求");
       break;
     case "open-report":
       state.sheet = "report";
@@ -1007,7 +1142,6 @@ app.addEventListener("click", (event) => {
       break;
     case "toggle-report-evidence":
       state.reportHasEvidence = target.checked;
-      render();
       break;
     case "submit-report": {
       const candidate = activeCandidate();
@@ -1036,14 +1170,17 @@ app.addEventListener("click", (event) => {
       break;
     case "toggle-supply-pledge":
       state.supplyPledge = target.checked;
-      render();
+      app.querySelector('[data-action="publish-supply"]')?.toggleAttribute(
+        "disabled",
+        !(state.supplyPledge && (state.supplyValidation || validateSupplyDraft(state.supplyDraft)).valid)
+      );
       break;
     case "publish-supply":
       if (!state.supplyPledge) {
         showToast("请先签署零中介承诺");
       } else {
         state.supplyStage = "published";
-        showToast("房源已进入模拟供给池");
+        showToast("房源已发布");
       }
       break;
     case "reset-supply":
@@ -1099,7 +1236,7 @@ app.addEventListener("click", (event) => {
       break;
     case "reset-all":
       resetAll();
-      showToast("流程已重置，视觉设置保留");
+      showToast("已重置");
       break;
     default:
       break;
