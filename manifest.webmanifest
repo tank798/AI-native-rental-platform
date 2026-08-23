@@ -1,0 +1,19 @@
+{
+  "name": "栖合 · AI 租房委托",
+  "short_name": "栖合",
+  "description": "只服务房东直租与个人转租的 AI 委托匹配原型",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f1e9",
+  "theme_color": "#f5f1e9",
+  "lang": "zh-CN",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "./assets/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

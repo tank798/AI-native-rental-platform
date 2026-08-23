@@ -1,0 +1,21 @@
+# Dependencies and environment
+node_modules/
+.env
+.env.*
+!.env.example
+
+# Local tooling and test artifacts
+.playwright-cli/
+output/playwright/
+.agents/
+skills-lock.json
+
+# OS and editor files
+.DS_Store
+*.swp
+*.log
+
+# Generated caches
+.cache/
+dist/
+build/
