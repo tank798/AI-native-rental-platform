@@ -1,17 +1,22 @@
-const CACHE_NAME = "qihe-prototype-v4";
+const CACHE_NAME = "zhunaer-prototype-shell";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
-  "./src/styles-v2.css",
+  "./src/app.css",
   "./src/app.mjs",
+  "./src/bear-agent.mjs",
+  "./src/task-lifecycle.mjs",
   "./src/demand-parser.mjs",
   "./src/fixtures.mjs",
   "./src/simulation-engine.mjs",
   "./assets/app-icon.svg",
-  "./assets/room-sunlit-v2.jpg",
-  "./assets/room-lanehouse-v2.jpg",
-  "./assets/room-compact-v2.jpg"
+  "./assets/bear-agent.svg",
+  "./assets/bear-agent-anchor.png",
+  "./assets/user-avatar.png",
+  "./assets/room-sunlit.jpg",
+  "./assets/room-lanehouse.jpg",
+  "./assets/room-compact.jpg"
 ];
 
 self.addEventListener("install", (event) => {

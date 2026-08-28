@@ -1,11 +1,13 @@
 {
-  "name": "qihe-rental-agent-prototype",
-  "version": "0.3.0",
+  "name": "zhunaer-rental-agent-prototype",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 4173",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/app.mjs && node --check src/demand-parser.mjs && node --check src/simulation-engine.mjs && node --check src/fixtures.mjs && node --check service-worker.js"
+    "check": "node --check src/app.mjs && node --check src/bear-agent.mjs && node --check src/task-lifecycle.mjs && node --check src/demand-parser.mjs && node --check src/simulation-engine.mjs && node --check src/fixtures.mjs && node --check src/ai/siliconflow-client.mjs && node --check src/ai/prompts.mjs && node --check src/ai/policy-engine.mjs && node --check evals/rental-eval-cases.mjs && node --check evals/run-qwen-eval.mjs && node --check evals/replay-policy.mjs && node --check service-worker.js",
+    "eval:ai": "node evals/run-qwen-eval.mjs",
+    "eval:ai:replay": "node evals/replay-policy.mjs"
   }
 }

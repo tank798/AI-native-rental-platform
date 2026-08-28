@@ -1,6 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="栖合应用图标">
-  <rect width="512" height="512" rx="112" fill="#090909"/>
-  <path d="M126 190h260v196H126z" fill="none" stroke="#fff" stroke-linejoin="round" stroke-width="28"/>
-  <path d="M256 190v196M126 286h260" fill="none" stroke="#fff" stroke-width="28"/>
-  <circle cx="326" cy="334" r="12" fill="#fff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="住哪儿应用图标">
+  <rect width="512" height="512" rx="112" fill="#111114"/>
+  <circle cx="256" cy="250" r="142" fill="none" stroke="#3157f6" stroke-width="24"/>
+  <circle cx="256" cy="250" r="86" fill="none" stroke="#70efc0" stroke-width="20"/>
+  <path d="M218 250h76M256 212v76" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="28"/>
+  <circle cx="370" cy="160" r="22" fill="#fff"/>
 </svg>

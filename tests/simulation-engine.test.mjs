@@ -6,6 +6,7 @@ import {
   evaluateListing,
   evaluateReport,
   matchMandate,
+  matchSupplyDraft,
   runRegressionSuite,
   validateSupplyDraft
 } from "../src/simulation-engine.mjs";
@@ -102,6 +103,28 @@ test("发布端禁止服务费和中介费", () => {
   });
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((item) => item.includes("服务费")));
+});
+
+test("发布端同样禁止信息费、带看费和签约费", () => {
+  for (const fee of ["information", "viewing", "signing"]) {
+    const result = validateSupplyDraft({
+      ...demoSupplyDraft,
+      fees: { ...demoSupplyDraft.fees, [fee]: 199 }
+    });
+    assert.equal(result.valid, false);
+  }
+});
+
+test("出租端会真实匹配十位租客并排除七类硬冲突", () => {
+  const result = matchSupplyDraft(demoSupplyDraft);
+  assert.equal(result.scanned, 10);
+  assert.equal(result.candidates.length, 3);
+  assert.deepEqual(result.candidates.map((item) => item.tenant.alias), ["林同学", "顾女士", "许同学"]);
+
+  const reasons = new Set(result.excluded.flatMap((item) => item.reasonCodes));
+  for (const reason of ["roommate_gender", "shared_housing", "location", "budget", "ensuite", "lease_term", "move_in"]) {
+    assert.ok(reasons.has(reason), `missing ${reason}`);
+  }
 });
 
 test("内置产品回归清单全部通过", () => {

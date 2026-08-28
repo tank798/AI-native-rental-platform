@@ -364,6 +364,10 @@ export const labScenarios = [
 
 export const demoSupplyDraft = {
   role: "subletter",
+  city: "上海",
+  district: "静安区",
+  location: "静安寺",
+  station: "静安寺站",
   address: "上海市静安区南阳路（楼栋号仅匹配后可见）",
   title: "静安寺 8 分钟，朝南次卧个人转租",
   listedRent: 3200,
@@ -391,9 +395,54 @@ export const demoSupplyDraft = {
     kitchen: true,
     washer: true,
     elevator: true,
+    ensuite: false,
     exposure: "south"
   }
 };
+
+function makeTenantCase({
+  id,
+  alias,
+  occupation,
+  locations = ["静安寺"],
+  target = 3000,
+  hardMax = 3200,
+  moveInFrom = "2026-08-28",
+  moveInTo = "2026-09-05",
+  leaseMonths = 12,
+  sharedHousing = true,
+  roommateGender = "female",
+  maxCommuteMinutes = 40,
+  ensuite = false
+}) {
+  const mandate = structuredClone(baseMandate);
+  mandate.id = `mandate-${id}`;
+  mandate.locations = locations;
+  mandate.budget.target = target;
+  mandate.budget.hardMax = hardMax;
+  mandate.moveInWindow = { from: moveInFrom, to: moveInTo };
+  mandate.leaseMonths = leaseMonths;
+  mandate.sharedHousing = sharedHousing;
+  mandate.roommateGender = roommateGender;
+  mandate.maxCommuteMinutes = maxCommuteMinutes;
+  mandate.hardConstraints.ensuite = ensuite;
+  return { id, alias, occupation, mandate };
+}
+
+// 出租端的对称评测集：既包含可继续的租客，也覆盖性别、整租、区域、
+// 预算、租期、入住日和独卫等常见硬冲突。
+export const tenantCases = [
+  makeTenantCase({ id: "tenant-01", alias: "林同学", occupation: "研究生", target: 3000, hardMax: 3200 }),
+  makeTenantCase({ id: "tenant-02", alias: "顾女士", occupation: "产品设计", target: 3100, hardMax: 3300, roommateGender: null }),
+  makeTenantCase({ id: "tenant-03", alias: "许同学", occupation: "应届毕业生", target: 2900, hardMax: 3000 }),
+  makeTenantCase({ id: "tenant-04", alias: "周先生", occupation: "工程师", roommateGender: "male" }),
+  makeTenantCase({ id: "tenant-05", alias: "沈女士", occupation: "教师", sharedHousing: false, roommateGender: null, hardMax: 4300 }),
+  makeTenantCase({ id: "tenant-06", alias: "陈同学", occupation: "实习生", locations: ["张江"], hardMax: 3200 }),
+  makeTenantCase({ id: "tenant-07", alias: "唐女士", occupation: "编辑", target: 2600, hardMax: 2800 }),
+  makeTenantCase({ id: "tenant-08", alias: "陆女士", occupation: "咨询顾问", target: 3200, hardMax: 3500, ensuite: true }),
+  makeTenantCase({ id: "tenant-09", alias: "韩同学", occupation: "交换生", target: 3200, hardMax: 3400, leaseMonths: 3 }),
+  makeTenantCase({ id: "tenant-10", alias: "夏女士", occupation: "金融从业", target: 3100, hardMax: 3300, moveInFrom: "2026-08-20", moveInTo: "2026-08-28" })
+];
 
 export function getListingsByIds(ids) {
   const allowed = new Set(ids);

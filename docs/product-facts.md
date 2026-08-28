@@ -1,4 +1,4 @@
-# V3 UI reference facts
+# UI reference facts
 
 > Verified: 2026-08-23
 > Purpose: visual research only. No reference assets are shipped in the product.

@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 430" role="img" aria-labelledby="bearTitle bearDescription">
+  <title id="bearTitle">住哪儿小熊分身</title>
+  <desc id="bearDescription">一只戴深蓝帽、穿浅蓝工作服的小熊，双手空着自然垂下。</desc>
+  <defs>
+    <linearGradient id="fur" x1=".22" y1=".08" x2=".78" y2=".95">
+      <stop offset="0" stop-color="#f5c58f"/>
+      <stop offset=".55" stop-color="#e8ad76"/>
+      <stop offset="1" stop-color="#c98655"/>
+    </linearGradient>
+    <linearGradient id="furSide" x1=".2" y1="0" x2=".85" y2="1">
+      <stop offset="0" stop-color="#edbd88"/>
+      <stop offset="1" stop-color="#bd764a"/>
+    </linearGradient>
+    <linearGradient id="shirtBlue" x1=".18" y1=".08" x2=".83" y2=".94">
+      <stop offset="0" stop-color="#a9daf8"/>
+      <stop offset=".52" stop-color="#7ebfe9"/>
+      <stop offset="1" stop-color="#4d94c7"/>
+    </linearGradient>
+    <linearGradient id="navy" x1=".2" y1="0" x2=".8" y2="1">
+      <stop offset="0" stop-color="#365f82"/>
+      <stop offset="1" stop-color="#17324c"/>
+    </linearGradient>
+    <radialGradient id="eye" cx="35%" cy="24%" r="75%">
+      <stop offset="0" stop-color="#664638"/>
+      <stop offset=".45" stop-color="#3f281f"/>
+      <stop offset="1" stop-color="#21130f"/>
+    </radialGradient>
+    <radialGradient id="cheek" cx="48%" cy="38%" r="60%">
+      <stop offset="0" stop-color="#ffda7e" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#f8b751" stop-opacity=".58"/>
+    </radialGradient>
+    <linearGradient id="badge" x1=".25" y1=".1" x2=".7" y2=".95">
+      <stop offset="0" stop-color="#ffe36b"/>
+      <stop offset="1" stop-color="#ffba28"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="clayLift" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#593923" flood-opacity=".2"/>
+    </filter>
+    <filter id="tinyLift" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="2" stdDeviation="1.8" flood-color="#1a2734" flood-opacity=".28"/>
+    </filter>
+  </defs>
+
+  <g id="BearAgent">
+    <g id="shadow">
+      <ellipse cx="180" cy="405" rx="92" ry="12" fill="#1d3550" opacity=".18" filter="url(#softShadow)"/>
+    </g>
+
+    <g id="body" filter="url(#clayLift)">
+      <path d="M95 291c15-24 44-37 85-37s70 13 85 37l5 86c-20 17-50 25-90 25s-70-8-90-25z" fill="url(#shirtBlue)"/>
+    </g>
+
+    <g id="pants" filter="url(#tinyLift)">
+      <path d="M101 360c22 7 49 11 79 11s57-4 79-11l-2 29c-5 12-17 18-36 18h-82c-19 0-31-6-36-18z" fill="url(#navy)"/>
+      <path d="M180 370v30" fill="none" stroke="#19334c" stroke-width="3" stroke-linecap="round" opacity=".5"/>
+    </g>
+
+    <g id="leftLeg" filter="url(#tinyLift)">
+      <rect x="116" y="385" width="51" height="29" rx="22" fill="url(#furSide)"/>
+    </g>
+
+    <g id="rightLeg" filter="url(#tinyLift)">
+      <rect x="193" y="385" width="51" height="29" rx="22" fill="url(#furSide)"/>
+    </g>
+
+    <g id="leftArm" filter="url(#tinyLift)">
+      <path d="M98 303c-19 3-29 18-27 40 2 20 11 31 27 32 14 0 23-11 22-27l-2-23c-2-15-8-23-20-22z" fill="url(#furSide)"/>
+      <path d="M91 355c7 7 16 7 23 1" fill="none" stroke="#a76543" stroke-width="3" stroke-linecap="round" opacity=".46"/>
+    </g>
+
+    <g id="rightArm" filter="url(#tinyLift)">
+      <path d="M262 303c19 3 29 18 27 40-2 20-11 31-27 32-14 0-23-11-22-27l2-23c2-15 8-23 20-22z" fill="url(#furSide)"/>
+      <path d="M269 355c-7 7-16 7-23 1" fill="none" stroke="#a76543" stroke-width="3" stroke-linecap="round" opacity=".46"/>
+    </g>
+
+    <g id="leftEar" filter="url(#tinyLift)">
+      <circle cx="92" cy="105" r="42" fill="url(#fur)"/>
+      <circle cx="92" cy="106" r="25" fill="#4a2d23"/>
+      <circle cx="85" cy="96" r="11" fill="#76503b" opacity=".32"/>
+    </g>
+
+    <g id="rightEar" filter="url(#tinyLift)">
+      <circle cx="268" cy="105" r="42" fill="url(#fur)"/>
+      <circle cx="268" cy="106" r="25" fill="#4a2d23"/>
+      <circle cx="261" cy="96" r="11" fill="#76503b" opacity=".32"/>
+    </g>
+
+    <g id="head" filter="url(#clayLift)">
+      <rect x="35" y="80" width="290" height="235" rx="118" fill="url(#fur)"/>
+      <ellipse cx="137" cy="115" rx="77" ry="44" fill="#ffd8ac" opacity=".2"/>
+      <path d="M62 245c26 54 73 70 118 70 47 0 95-16 119-70-16 48-57 80-119 80-60 0-103-31-118-80z" fill="#9b5f3e" opacity=".09"/>
+    </g>
+
+    <g id="leftEye" filter="url(#tinyLift)">
+      <ellipse cx="130" cy="208" rx="18" ry="22" fill="url(#eye)"/>
+      <circle cx="124" cy="200" r="4" fill="#fff" opacity=".2"/>
+    </g>
+
+    <g id="rightEye" filter="url(#tinyLift)">
+      <ellipse cx="230" cy="208" rx="18" ry="22" fill="url(#eye)"/>
+      <circle cx="224" cy="200" r="4" fill="#fff" opacity=".2"/>
+    </g>
+
+    <g id="leftEyebrow" filter="url(#tinyLift)">
+      <path d="M125 172l-15-10" fill="none" stroke="#3a2119" stroke-width="8" stroke-linecap="round"/>
+    </g>
+
+    <g id="rightEyebrow" filter="url(#tinyLift)">
+      <path d="M235 172l15-10" fill="none" stroke="#3a2119" stroke-width="8" stroke-linecap="round"/>
+    </g>
+
+    <g id="mouth" filter="url(#tinyLift)">
+      <path d="M158 230c2 14 17 14 22 3 5 11 20 11 22-3" fill="none" stroke="#3a2119" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <g id="leftCheek">
+      <circle cx="91" cy="244" r="28" fill="url(#cheek)"/>
+    </g>
+
+    <g id="rightCheek">
+      <circle cx="269" cy="244" r="28" fill="url(#cheek)"/>
+    </g>
+
+    <g id="hat" filter="url(#tinyLift)">
+      <path d="M118 84c4-34 28-57 62-57s58 23 62 57c-18-9-39-13-62-13s-44 4-62 13z" fill="url(#navy)"/>
+      <path d="M112 88c18-15 41-22 68-22s50 7 68 22c-16 10-39 15-68 15s-52-5-68-15z" fill="#3f2a25"/>
+      <path d="M128 64c10-19 28-29 52-29 20 0 37 8 48 23-28-10-62-8-100 6z" fill="#6f9fbe" opacity=".22"/>
+    </g>
+
+    <g id="shirt">
+      <path d="M101 295c17-18 43-27 79-27s62 9 79 27l-22 27-57-45-57 45z" fill="#a9daf8" opacity=".35"/>
+      <path d="M121 288l59 40-42 24-35-47z" fill="#9ed4f4" stroke="#4f95c5" stroke-width="2"/>
+      <path d="M239 288l-59 40 42 24 35-47z" fill="#9ed4f4" stroke="#4f95c5" stroke-width="2"/>
+      <path d="M180 327v43" fill="none" stroke="#438abb" stroke-width="3" opacity=".7"/>
+      <circle cx="180" cy="353" r="7" fill="#d9ecfb" stroke="#4c91c3" stroke-width="2"/>
+      <path d="M222 344h35v23c-10 4-25 4-35 0z" fill="#8bc9ef" stroke="#4d94c7" stroke-width="2"/>
+    </g>
+
+    <g id="locationBadge" filter="url(#tinyLift)">
+      <path d="M239 330c0-13 10-23 23-23s23 10 23 23c0 17-23 38-23 38s-23-21-23-38z" fill="url(#badge)" stroke="#f2a911" stroke-width="2"/>
+      <circle cx="262" cy="330" r="8" fill="#6baedf" stroke="#fff3aa" stroke-width="3"/>
+    </g>
+  </g>
+</svg>

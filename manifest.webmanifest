@@ -1,7 +1,7 @@
 {
-  "name": "栖合 · 租房委托",
-  "short_name": "栖合",
-  "description": "只服务房东直租与个人转租的租房委托",
+  "name": "住哪儿 · AI 匹配租房",
+  "short_name": "住哪儿",
+  "description": "让 AI 分身持续匹配个人直租与转租",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#ffffff",

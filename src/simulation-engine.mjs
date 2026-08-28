@@ -4,7 +4,8 @@ import {
   demoSupplyDraft,
   getListingsByIds,
   labScenarios,
-  listings
+  listings,
+  tenantCases
 } from "./fixtures.mjs";
 
 const ALLOWED_SUPPLY_ROLES = new Set(["landlord", "subletter"]);
@@ -25,6 +26,7 @@ const reasonLabels = {
   shared_housing: "该房源需要与他人合租",
   ensuite: "没有独立卫生间",
   elevator: "房源没有电梯",
+  lease_term: "可接受租期短于房源最低租期",
   budget: "未能在授权预算内达成意向"
 };
 
@@ -104,6 +106,7 @@ function hardConstraintAssessment(mandate, listing) {
   if (!mandate.sharedHousing && Number(listing.room?.roommateCount || 0) > 0) reasons.push("shared_housing");
   if (mandate.hardConstraints.ensuite && !listing.facilities?.ensuite) reasons.push("ensuite");
   if (mandate.hardConstraints.elevator && !listing.facilities?.elevator) reasons.push("elevator");
+  if (Number(mandate.leaseMonths || 0) < Number(listing.leaseMonthsMin || 0)) reasons.push("lease_term");
 
   return reasons;
 }
@@ -127,7 +130,7 @@ export function negotiate(mandate, listing) {
     {
       type: "clarification",
       actor: "出租 AI",
-      title: "返回已核验条件",
+      title: "返回房源条件",
       detail: `挂牌 ${money(listing.listedRent)}/月，押 ${listing.depositMonths} 个月；不收中介费、服务费。`
     }
   ];
@@ -203,7 +206,7 @@ export function negotiate(mandate, listing) {
     type: "rejection",
     actor: "找房 AI",
     title: "停止议价",
-    detail: "对方底价超出授权范围，AI 没有擅自加价。"
+    detail: "双方授权范围没有交集，未继续加价。"
   });
   return { status: "rejected", agreedRent: null, agreementLabel: "", publicEvents };
 }
@@ -395,7 +398,8 @@ export function validateSupplyDraft(draft) {
   if (!Number.isFinite(Number(draft.listedRent)) || Number(draft.listedRent) <= 0) errors.push("租金必须是有效金额");
   if (!draft.availableFrom) errors.push("需要填写可入住日期");
   else if (compareDate(draft.availableFrom, SIMULATION_DATE) < 0) errors.push("可入住日期不能早于今天");
-  if (Number(draft.fees?.service || 0) > 0 || Number(draft.fees?.intermediary || 0) > 0) {
+  const prohibitedFeeKeys = ["service", "intermediary", "information", "viewing", "signing"];
+  if (prohibitedFeeKeys.some((key) => Number(draft.fees?.[key] || 0) > 0)) {
     errors.push("不得收取中介费、服务费、信息费或带看费");
   }
   if (!draft.evidence?.identity) errors.push("身份核验未完成");
@@ -410,6 +414,113 @@ export function validateSupplyDraft(draft) {
     errors,
     warnings,
     badge: errors.length === 0 ? "四项核验完成" : "暂不可发布"
+  };
+}
+
+function listingFromSupplyDraft(draft, mandate, index) {
+  const requestedNearListing = (mandate.locations || []).some((place) => {
+    const wanted = normalizePlace(place);
+    return [draft.location, draft.station, draft.district, draft.address]
+      .map(normalizePlace)
+      .some((candidate) => candidate && (candidate.includes(wanted) || wanted.includes(candidate)));
+  });
+
+  return {
+    id: `draft-${draft.role || "supply"}`,
+    title: draft.title,
+    shortTitle: draft.title,
+    role: draft.role,
+    claimedRole: draft.role,
+    publisher: draft.role === "landlord" ? "房东本人" : "当前租客",
+    district: draft.district || "静安区",
+    location: draft.location || "静安寺",
+    station: draft.station || "静安寺站",
+    walkMinutes: 8,
+    commuteMinutes: requestedNearListing ? 18 + (index % 3) * 4 : 55,
+    addressHint: draft.address,
+    listedRent: Number(draft.listedRent),
+    minRent: Number(draft.minimumAuthorizedRent || draft.listedRent),
+    depositMonths: Math.max(1, Math.round(Number(draft.fees?.deposit || draft.listedRent) / Number(draft.listedRent || 1))),
+    availableFrom: draft.availableFrom,
+    leaseMonthsMin: 12,
+    conditionalOffers: [],
+    room: {
+      areaSqm: 15,
+      floor: 9,
+      totalFloors: 18,
+      roommateCount: Number(draft.roommateCount || 0),
+      roommateGender: draft.roommateGender || null
+    },
+    facilities: {
+      kitchen: Boolean(draft.facilities?.kitchen),
+      washer: Boolean(draft.facilities?.washer),
+      washerType: "drum",
+      elevator: Boolean(draft.facilities?.elevator),
+      ensuite: Boolean(draft.facilities?.ensuite),
+      exposure: draft.facilities?.exposure || "unknown",
+      utilities: "residential"
+    },
+    fees: {
+      service: Number(draft.fees?.service || 0),
+      intermediary: Number(draft.fees?.intermediary || 0),
+      information: Number(draft.fees?.information || 0),
+      viewing: Number(draft.fees?.viewing || 0),
+      signing: Number(draft.fees?.signing || 0),
+      propertyMonthly: Number(draft.fees?.property || 0),
+      networkMonthly: Number(draft.fees?.network || 0)
+    },
+    verification: {
+      identity: draft.evidence?.identity ? "verified" : "missing",
+      role: draft.evidence?.roleDocument ? "verified" : "missing",
+      rights: draft.evidence?.rightsDocument ? "verified" : "missing",
+      liveSite: draft.evidence?.livePhotoChallenge ? "verified" : "unverified"
+    },
+    lastVerifiedDays: 0,
+    freshness: "live",
+    evidence: { duplicatePhoto: false, feeMessage: false, roleConflict: false }
+  };
+}
+
+export function matchSupplyDraft(draft, cases = tenantCases) {
+  const validation = validateSupplyDraft(draft);
+  if (!validation.valid) {
+    return { scanned: 0, eligibleCount: 0, candidates: [], excluded: [], audit: [], validation };
+  }
+
+  const evaluated = cases.map((tenant, index) => {
+    const result = evaluateListing(tenant.mandate, listingFromSupplyDraft(draft, tenant.mandate, index));
+    return { ...result, tenant };
+  });
+  const eligible = evaluated
+    .filter((item) => item.status === "eligible")
+    .sort((a, b) => b.score - a.score);
+  const excluded = evaluated.filter((item) => item.status !== "eligible");
+  const candidates = eligible.slice(0, 3).map((item, index) => ({
+    tenant: item.tenant,
+    agreedRent: item.agreedRent,
+    score: item.score,
+    reasons: item.reasons,
+    caveats: item.caveats,
+    negotiation: item.negotiation,
+    selectionLabel: ["条件最稳", "入住最快", "价格合适"][index] || "可继续"
+  }));
+
+  return {
+    scanned: cases.length,
+    eligibleCount: eligible.length,
+    candidates,
+    eligible,
+    excluded,
+    validation,
+    audit: [
+      { actor: "平台", title: `读取 ${cases.length} 份找房委托`, detail: "逐项比较区域、入住日、合租、租期、设施与预算。" },
+      ...excluded.slice(0, 4).map((item) => ({
+        actor: "匹配 AI",
+        title: `未继续：${item.tenant.alias}`,
+        detail: item.reasonLabels?.join("；") || "双方授权范围没有交集"
+      })),
+      { actor: "匹配 AI", title: `整理 ${candidates.length} 位候选租客`, detail: "只交付硬条件无冲突且价格能够形成意向的候选。" }
+    ]
   };
 }
 

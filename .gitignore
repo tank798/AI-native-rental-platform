@@ -3,12 +3,16 @@ node_modules/
 .env
 .env.*
 !.env.example
+*.key
+*api key*
 
 # Local tooling and test artifacts
 .playwright-cli/
 output/playwright/
 .agents/
 skills-lock.json
+evals/results/*.json
+evals/results/*.raw.*
 
 # OS and editor files
 .DS_Store
