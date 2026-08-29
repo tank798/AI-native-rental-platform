@@ -1,4 +1,4 @@
-const CACHE_NAME = "zhunaer-prototype-shell";
+const CACHE_NAME = "zhunaer-app-shell";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -8,6 +8,8 @@ const APP_SHELL = [
   "./src/bear-agent.mjs",
   "./src/task-lifecycle.mjs",
   "./src/demand-parser.mjs",
+  "./src/supply-parser.mjs",
+  "./src/marketplace-corpus.mjs",
   "./src/fixtures.mjs",
   "./src/simulation-engine.mjs",
   "./assets/app-icon.svg",
@@ -34,7 +36,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: "no-store" })
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));

@@ -394,10 +394,16 @@ export function validateSupplyDraft(draft) {
   const warnings = [];
 
   if (!ALLOWED_SUPPLY_ROLES.has(draft.role)) errors.push("只允许产权人直租或当前承租人个人转租");
+  if (!draft.location?.trim()) errors.push("需要确认房源区域");
   if (!draft.address?.trim()) errors.push("需要完整地址用于平台核验");
   if (!Number.isFinite(Number(draft.listedRent)) || Number(draft.listedRent) <= 0) errors.push("租金必须是有效金额");
+  if (!Number.isFinite(Number(draft.minimumAuthorizedRent)) || Number(draft.minimumAuthorizedRent) <= 0 || Number(draft.minimumAuthorizedRent) > Number(draft.listedRent)) errors.push("最低授权租金不能高于挂牌价");
   if (!draft.availableFrom) errors.push("需要填写可入住日期");
   else if (compareDate(draft.availableFrom, SIMULATION_DATE) < 0) errors.push("可入住日期不能早于今天");
+  if (![3, 6, 12].includes(Number(draft.leaseMonthsMin))) errors.push("需要确认最短租期");
+  if (!Number.isFinite(Number(draft.areaSqm)) || Number(draft.areaSqm) <= 0) errors.push("需要确认房间面积");
+  if (!Number.isFinite(Number(draft.floor)) || !Number.isFinite(Number(draft.totalFloors)) || Number(draft.floor) <= 0 || Number(draft.floor) > Number(draft.totalFloors)) errors.push("需要确认正确楼层");
+  if (Number(draft.roommateCount || 0) > 0 && !["female", "male"].includes(draft.roommateGender)) errors.push("需要确认室友性别");
   const prohibitedFeeKeys = ["service", "intermediary", "information", "viewing", "signing"];
   if (prohibitedFeeKeys.some((key) => Number(draft.fees?.[key] || 0) > 0)) {
     errors.push("不得收取中介费、服务费、信息费或带看费");
@@ -442,23 +448,24 @@ function listingFromSupplyDraft(draft, mandate, index) {
     minRent: Number(draft.minimumAuthorizedRent || draft.listedRent),
     depositMonths: Math.max(1, Math.round(Number(draft.fees?.deposit || draft.listedRent) / Number(draft.listedRent || 1))),
     availableFrom: draft.availableFrom,
-    leaseMonthsMin: 12,
+    leaseMonthsMin: Number(draft.leaseMonthsMin || 12),
     conditionalOffers: [],
     room: {
-      areaSqm: 15,
-      floor: 9,
-      totalFloors: 18,
+      areaSqm: Number(draft.areaSqm || 0),
+      floor: Number(draft.floor || 0),
+      totalFloors: Number(draft.totalFloors || 0),
       roommateCount: Number(draft.roommateCount || 0),
       roommateGender: draft.roommateGender || null
     },
     facilities: {
       kitchen: Boolean(draft.facilities?.kitchen),
       washer: Boolean(draft.facilities?.washer),
-      washerType: "drum",
+      washerType: draft.facilities?.washerType || "unknown",
       elevator: Boolean(draft.facilities?.elevator),
       ensuite: Boolean(draft.facilities?.ensuite),
       exposure: draft.facilities?.exposure || "unknown",
-      utilities: "residential"
+      utilities: /民水民电/.test(String(draft.fees?.utilities || "")) ? "residential" : "unknown",
+      network: draft.facilities?.network || (Number(draft.fees?.network || 0) === 0 ? "included" : "shared")
     },
     fees: {
       service: Number(draft.fees?.service || 0),
@@ -477,7 +484,8 @@ function listingFromSupplyDraft(draft, mandate, index) {
     },
     lastVerifiedDays: 0,
     freshness: "live",
-    evidence: { duplicatePhoto: false, feeMessage: false, roleConflict: false }
+    evidence: { duplicatePhoto: false, feeMessage: false, roleConflict: false },
+    viewingAvailability: draft.viewingAvailability || "any"
   };
 }
 

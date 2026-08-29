@@ -374,6 +374,11 @@ export const demoSupplyDraft = {
   minimumAuthorizedRent: 3000,
   availableFrom: "2026-08-29",
   leaseEnd: "2027-08-31",
+  leaseMonthsMin: 12,
+  areaSqm: 15,
+  floor: 9,
+  totalFloors: 18,
+  viewingAvailability: "any",
   roommateGender: "female",
   roommateCount: 2,
   fees: {

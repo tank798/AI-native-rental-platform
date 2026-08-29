@@ -10,7 +10,16 @@ const LOCATION_CATALOG = [
   "五角场",
   "人民广场",
   "中山公园",
-  "曹杨路"
+  "曹杨路",
+  "漕河泾",
+  "大宁",
+  "世纪大道",
+  "长寿路",
+  "天潼路",
+  "衡山路",
+  "虹桥路",
+  "金桥",
+  "外滩"
 ];
 
 function currentDateInShanghai() {
@@ -67,6 +76,16 @@ function parseBudget(text) {
     const high = amountFrom(range[3], range[4], sharedUnit);
     if (low >= 1000 && high >= low) {
       return { target: low, hardMax: high, explicitRange: true, capInferred: false };
+    }
+  }
+
+  const explicitTarget = text.match(/(?:理想|目标|希望控制在)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*(k|千)?/i);
+  const explicitMax = text.match(/(?:封顶|最高|最多|不超过)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*(k|千)?/i);
+  if (explicitMax) {
+    const hardMax = amountFrom(explicitMax[1], explicitMax[2], "");
+    const target = explicitTarget ? amountFrom(explicitTarget[1], explicitTarget[2], "") : hardMax;
+    if (target >= 1000 && hardMax >= target) {
+      return { target, hardMax, explicitRange: Boolean(explicitTarget), capInferred: false };
     }
   }
 
@@ -128,8 +147,8 @@ function parseMoveIn(text, referenceDate) {
 function parseCommute(text) {
   if (/半小时/.test(text)) return 30;
   if (/一小时/.test(text)) return 60;
-  const match = text.match(/(?:通勤|路上|地铁|到公司).{0,10}?(\d{1,3})\s*分钟|(?:最多|不超过|控制在)?\s*(\d{1,3})\s*分钟.{0,8}?(?:通勤|以内|之内|到公司)/);
-  return match ? Number(match[1] || match[2]) : null;
+  const match = text.match(/(?:通勤|路上|地铁|到公司).{0,12}?(\d{1,3})\s*(?:分钟|min)|(?:最多|不超过|控制在)?\s*(\d{1,3})\s*(?:分钟|min).{0,8}?(?:通勤|以内|之内|到公司)|(?:最多|不超过|控制在)\s*(\d{1,3})\s*分钟/);
+  return match ? Number(match[1] || match[2] || match[3]) : null;
 }
 
 function parseSharedHousing(text) {
@@ -144,8 +163,31 @@ function parseRoommateGender(text) {
   return null;
 }
 
+function parseLeaseMonths(text) {
+  if (/(?:租|住)(?:满)?一年|一年(?:起租|长租)|长租/.test(text)) return 12;
+  if (/(?:租|住)(?:满)?半年|半年(?:起租|左右)/.test(text)) return 6;
+  const match = text.match(/(?:租期|至少租|准备租|打算租|能租|租|住)\s*(?:大概|约|至少)?\s*(\d{1,2})\s*个?月/);
+  return match ? Number(match[1]) : null;
+}
+
+function parseFloorPreference(text) {
+  if (/高楼层|高层|视野好/.test(text)) return "high";
+  if (/中楼层|中层/.test(text)) return "middle";
+  if (/低楼层|低层|方便上下楼/.test(text)) return "low";
+  if (/楼层不限|楼层无所谓|几楼都行/.test(text)) return "any";
+  return null;
+}
+
+function parseViewingAvailability(text) {
+  if (/工作日(?:晚上|晚间|下班后)/.test(text)) return "weekday_evening";
+  if (/周末/.test(text)) return "weekend";
+  if (/随时看房|看房时间不限|看房都可以/.test(text)) return "any";
+  return null;
+}
+
 function cleanLocationCandidate(value) {
   return String(value || "")
+    .replace(/^(?:求租|位置|地点)\s*[：:]\s*/, "")
     .replace(/^(?:我|本人)?(?:想|希望|打算|准备)?(?:要|去)?(?:住|租|找房)?(?:在|到)?\s*/, "")
     .replace(/(?:附近|周边|一带|这边|都可以|均可)$/g, "")
     .replace(/^(?:上海|北京|深圳|广州)(?:市)?/, "")
@@ -169,7 +211,9 @@ function parseLocations(text) {
 
   const explicitPatterns = [
     /(?:想住|希望住|打算住|准备住|住在|找房在|租在|区域(?:是|在)|地点(?:是|在)|靠近)\s*([^，,。；;]{2,32}?)(?=(?:，|,|。|；|;|预算|租金|入住|通勤|整租|合租|$))/g,
-    /(?:^|[，,。；;])\s*([^，,。；;]{2,24}?)(?:附近|周边|一带)(?=(?:，|,|。|；|;|预算|租金|入住|通勤|整租|合租|$))/g
+    /(?:^|[，,。；;])\s*([^，,。；;]{2,24}?)(?:附近|周边|一带)(?=(?:，|,|。|；|;|预算|租金|入住|通勤|整租|合租|$))/g,
+    /(?:位置|地点)\s*[：:]\s*([^（(，,。；;\n]{2,24})/g,
+    /(?:帮我找|想找|找)\s*([^，,。；;]{2,16}?)\s*(?:的房|房子)/g
   ];
 
   explicitPatterns.forEach((pattern) => {
@@ -181,9 +225,10 @@ function parseLocations(text) {
 
 function parsePreference(text, nounPattern) {
   const noun = `(?:${nounPattern})`;
-  if (new RegExp(`(?:必须|一定|只要|需要).{0,5}${noun}|${noun}.{0,5}(?:必须|一定|才行)`).test(text)) return "required";
-  if (new RegExp(`(?:最好|优先|希望).{0,5}${noun}|${noun}.{0,5}(?:最好|优先)`).test(text)) return "preferred";
-  if (new RegExp(`(?:不需要|无所谓|不限).{0,5}${noun}|${noun}.{0,5}(?:不需要|无所谓|不限)`).test(text)) return "any";
+  const gap = "[^，,。；;]{0,4}";
+  if (new RegExp(`${noun}\\s*(?:最好|优先)|(?:最好|优先|希望)${gap}${noun}`).test(text)) return "preferred";
+  if (new RegExp(`${noun}\\s*(?:不需要|无所谓|不限)|(?:不需要|无所谓|不限)${gap}${noun}`).test(text)) return "any";
+  if (new RegExp(`${noun}\\s*(?:必须|一定|才行)|(?:必须|一定|只要|需要)${gap}${noun}`).test(text)) return "required";
   if (new RegExp(noun).test(text)) return "preferred";
   return null;
 }
@@ -199,6 +244,9 @@ export function parseDemandText(rawText, referenceDate = currentDateInShanghai()
   const maxCommuteMinutes = parseCommute(text);
   const sharedHousing = parseSharedHousing(text);
   const roommateGender = parseRoommateGender(text);
+  const leaseMonths = parseLeaseMonths(text);
+  const floor = parseFloorPreference(text);
+  const viewingAvailability = parseViewingAvailability(text);
   const ensuite = parsePreference(text, "独卫|独立卫生间");
   const elevator = parsePreference(text, "电梯");
   const kitchen = /不需要厨房|厨房无所谓/.test(text) ? false : /厨房/.test(text) ? true : null;
@@ -206,6 +254,13 @@ export function parseDemandText(rawText, referenceDate = currentDateInShanghai()
   const utilities = /民水民电/.test(text) ? "residential" : /水电.{0,8}(?:清楚|透明|说清)|(?:清楚|透明).{0,8}水电/.test(text) ? "known" : null;
   const washerType = /滚筒/.test(text) ? "drum" : /波轮|涡轮/.test(text) ? "pulsator" : null;
   const exposure = /朝南|南向/.test(text) ? "south" : /朝北|北向/.test(text) ? "north" : /朝东|东向/.test(text) ? "east" : /朝西|西向/.test(text) ? "west" : null;
+  const network = /(?:需要|必须|要)[^，,。；;]{0,20}(?:网络|宽带|wifi)|(?:网络|宽带|wifi)[^，,。；;]{0,4}(?:需要|必须)/i.test(text)
+    ? "required"
+    : /(?:网络|宽带|wifi).{0,4}(?:不限|无所谓)|(?:不限|无所谓).{0,4}(?:网络|宽带|wifi)/i.test(text)
+      ? "any"
+      : /网络|宽带|wifi/i.test(text)
+        ? "preferred"
+        : null;
 
   const coreMissing = [];
   if (!locations.length) coreMissing.push("location");
@@ -229,9 +284,11 @@ export function parseDemandText(rawText, referenceDate = currentDateInShanghai()
       budget,
       moveInWindow,
       maxCommuteMinutes,
+      leaseMonths,
       sharedHousing,
       roommateGender,
-      preferences: { ensuite, elevator, utilities, washerType, exposure },
+      viewingAvailability,
+      preferences: { ensuite, elevator, utilities, washerType, exposure, floor, network },
       facilities: { kitchen, washer }
     },
     coreMissing,
@@ -250,11 +307,15 @@ export function parsedDemandTags(parsed) {
   }
   if (fields.moveInWindow) tags.push(fields.moveInWindow.label);
   if (fields.maxCommuteMinutes) tags.push(`通勤 ≤ ${fields.maxCommuteMinutes} 分钟`);
+  if (fields.leaseMonths) tags.push(`${fields.leaseMonths} 个月`);
   if (fields.sharedHousing === false) tags.push("整租");
   if (fields.sharedHousing === true && fields.roommateGender === "female") tags.push("女生合租");
   else if (fields.sharedHousing === true) tags.push("可合租");
   if (fields.preferences.ensuite === "required") tags.push("必须独卫");
   if (fields.preferences.exposure === "south") tags.push("朝南");
+  if (fields.preferences.floor && fields.preferences.floor !== "any") {
+    tags.push({ low: "低楼层", middle: "中楼层", high: "高楼层" }[fields.preferences.floor]);
+  }
   if (fields.facilities.kitchen) tags.push("要厨房");
   if (fields.facilities.washer) tags.push("要洗衣机");
   return tags;
