@@ -21,6 +21,15 @@ import {
   evaluateTaskLifecycle,
   renewTaskLifecycle
 } from "./task-lifecycle.mjs";
+import {
+  createServerTask,
+  ensureServerSession,
+  getServerTask,
+  listServerTasks,
+  parseRenterWithServer,
+  parseSupplyWithServer,
+  uploadEvidenceFile
+} from "./api-client.mjs";
 
 const app = document.querySelector("#app");
 
@@ -153,6 +162,12 @@ function freshSupplyDraft() {
       ensuite: false,
       exposure: "unknown",
       network: "included"
+    },
+    evidence: {
+      identity: false,
+      roleDocument: false,
+      rightsDocument: false,
+      livePhotoChallenge: false
     }
   };
 }
@@ -208,7 +223,13 @@ function initialProductState() {
     supplyDraft: freshSupplyDraft(),
     supplyPledge: false,
     supplyValidation: null,
-    photoPreviews: [{ src: "./assets/room-sunlit.jpg", label: "卧室" }],
+    supplyEvidenceRefs: {},
+    evidenceUploading: null,
+    intakeProvider: null,
+    intakeLoading: false,
+    serverReady: false,
+    syncError: null,
+    photoPreviews: [],
     task: null,
     result: null,
     supplyResult: null,
@@ -287,8 +308,9 @@ let voiceRecognition = null;
 let toastTimer = null;
 let lastViewKey = null;
 let matchTimers = [];
+let taskPollTimer = null;
 
-if (state.task && !state.task.delivered) {
+if (state.task?.remoteId && !state.task.delivered) {
   const restoredResult = state.task.kind === "renter" ? state.result : state.supplyResult;
   state.task.phaseIndex = 3;
   state.task.scanned = state.task.total;
@@ -352,8 +374,13 @@ async function copyText(text, successMessage) {
 
 function syncExpiredTask() {
   if (!state.task?.lifecycle) return;
+  if (state.task.remoteId && state.task.status !== "active") {
+    clearTaskPolling();
+    if (state.task.status !== "expired") return;
+  }
   const lifecycleState = evaluateTaskLifecycle(state.task.lifecycle, todayInShanghai());
   if (!lifecycleState.expired) return;
+  if (state.task.remoteId) clearTaskPolling();
   state.archivedTasks.push({ ...state.task, archivedReason: "expired" });
   state.task = null;
   state.result = null;
@@ -479,7 +506,7 @@ function renterInput() {
       <textarea id="demand-input" name="rental-demand" autocomplete="off" data-input="draft-text" aria-label="输入找房需求" placeholder="位置、预算、入住时间，想到什么就说什么">${escapeHtml(state.draftText)}</textarea>
       <div class="composer-footer">
         <button class="round-control ${state.listening ? "is-listening" : ""}" data-action="voice-input" aria-label="语音输入">${icon("mic")}</button>
-        <button class="composer-next" data-action="start-intake">继续 ${icon("arrow")}</button>
+        <button class="composer-next" data-action="start-intake" ${state.intakeLoading ? "disabled" : ""}>${state.intakeLoading ? "AI 整理中" : `继续 ${icon("arrow")}`}</button>
       </div>
     </div>
     <button class="map-entry" data-action="open-location">
@@ -537,13 +564,14 @@ function renterClarify() {
   const tags = parsedDemandTags(parsed);
   const today = todayInShanghai();
   const missing = new Set(parsed.coreMissing);
+  const aiQuestion = Array.isArray(parsed.aiQuestions) ? parsed.aiQuestions.find((question) => String(question || "").trim()) : null;
   const field = (key, label, body) => `<div class="dialogue-field ${missing.has(key) ? "is-missing" : ""}"><b>${label}</b><div>${body}</div></div>`;
   return `<section class="flow-screen">
     ${flowHeader("和找房分身确认")}
     <div class="rental-chat">
       <div class="chat-line is-user"><div class="chat-bubble">${escapeHtml(state.draftText || state.selectedLocations.join("、"))}</div></div>
-      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "<span>等你补充</span>"}</div></div></div>
-      <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble dialogue-card"><b>再确认一下</b>
+      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "<span>等你补充</span>"}</div><small class="intake-source">${state.intakeProvider === "siliconflow" ? "AI 结构化 · 规则复核" : "确定性解析 · 安全模式"}</small></div></div>
+      <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble dialogue-card"><b>${escapeHtml(aiQuestion || "再确认一下")}</b>
         <div class="dialogue-fields">
           ${field("location", "区域", `<button class="dialogue-location" data-action="open-location"><span>${state.selectedLocations.length ? state.selectedLocations.join("、") : "打开地图选择"}</span>${icon("arrow")}</button>`)}
           ${field("budget", "预算", `<div class="paired-inputs"><label><span>理想</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-min" value="${escapeHtml(state.answers.budgetMin)}" placeholder="3000" /></div></label><i>—</i><label><span>最高</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-max" value="${escapeHtml(state.answers.budgetMax)}" placeholder="4000" /></div></label></div>`)}
@@ -603,6 +631,17 @@ function supplyChoice(key, value, label, activeValue) {
   return `<button class="choice-chip" data-action="set-supply-detail" data-key="${key}" data-value="${value}" aria-pressed="${String(activeValue) === String(value)}">${label}</button>`;
 }
 
+function evidenceUploadRow(kind, title, detail, accept = "image/*,application/pdf") {
+  const uploaded = Boolean(state.supplyEvidenceRefs[kind]);
+  const uploading = state.evidenceUploading === kind;
+  return `<div class="evidence-upload-row ${uploaded ? "is-complete" : ""}">
+    <span>${uploaded ? icon("check") : icon("shield")}</span>
+    <div><b>${title}</b><p>${uploaded ? "已私密上传" : detail}</p></div>
+    <button data-action="trigger-evidence" data-value="${kind}" ${uploading ? "disabled" : ""}>${uploading ? "上传中" : uploaded ? "更换" : "上传"}</button>
+    <input id="evidence-${kind}" hidden type="file" accept="${accept}" data-evidence-file="${kind}" />
+  </div>`;
+}
+
 function supplyInputScreen() {
   return `<section class="flow-screen renter-input-screen">
     ${flowHeader("发布房源")}
@@ -611,7 +650,7 @@ function supplyInputScreen() {
     </div>
     <div class="composer-card supply-composer" data-filled="${Boolean(state.supplyText.trim())}">
       <textarea id="supply-input" name="rental-supply" autocomplete="off" data-input="supply-text" aria-label="输入房源信息" placeholder="位置、租金、入住时间、室友和设施，想到什么就说什么">${escapeHtml(state.supplyText)}</textarea>
-      <div class="composer-footer"><span></span><button class="composer-next" data-action="start-supply-intake">继续 ${icon("arrow")}</button></div>
+      <div class="composer-footer"><span></span><button class="composer-next" data-action="start-supply-intake" ${state.intakeLoading ? "disabled" : ""}>${state.intakeLoading ? "AI 整理中" : `继续 ${icon("arrow")}`}</button></div>
     </div>
   </section>`;
 }
@@ -658,7 +697,7 @@ function supplyDraftScreen() {
     ${flowHeader("和出租分身确认")}
     <div class="rental-chat supply-chat">
       <div class="chat-line is-user"><div class="chat-bubble">${escapeHtml(state.supplyText)}</div></div>
-      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div></div></div>
+      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div><small class="intake-source">${state.intakeProvider === "siliconflow" ? "AI 结构化 · 规则复核" : "确定性解析 · 安全模式"}</small></div></div>
       <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble dialogue-card"><b>再确认一下</b>
         <div class="dialogue-fields supply-dialogue-fields">
           <div class="dialogue-field"><b>身份</b><div class="role-options"><button data-action="set-supply-role" data-value="landlord" aria-pressed="${draft.role === "landlord"}">房东本人</button><button data-action="set-supply-role" data-value="subletter" aria-pressed="${draft.role === "subletter"}">当前租客</button></div></div>
@@ -676,7 +715,13 @@ function supplyDraftScreen() {
         </div>
       </div></div>
     </div>
-    <section class="form-section photo-section conversational-photo"><div class="section-title"><h2>房源照片</h2><button data-action="open-photo-source">添加</button></div><div class="photo-grid">${state.photoPreviews.map((photo) => `<figure><img src="${photo.src}" width="240" height="180" loading="lazy" alt="${escapeHtml(photo.label)}"/><figcaption>${escapeHtml(photo.label)}</figcaption></figure>`).join("")}<button class="add-photo" data-action="open-photo-source">${icon("plus")}<span>拍摄或选择</span></button></div></section>
+    <section class="form-section photo-section conversational-photo"><div class="section-title"><h2>房源现场</h2><button data-action="open-photo-source">添加</button></div><div class="photo-grid">${state.photoPreviews.map((photo) => `<figure><img src="${photo.src}" width="240" height="180" loading="lazy" alt="${escapeHtml(photo.label)}"/><figcaption>${escapeHtml(photo.label)}</figcaption></figure>`).join("")}<button class="add-photo" data-action="open-photo-source">${icon("plus")}<span>拍摄或选择</span></button></div></section>
+    <section class="form-section evidence-upload-panel"><div class="section-title"><h2>发布材料</h2><span>仅用于平台核验</span></div>
+      ${evidenceUploadRow("identity", "身份材料", "身份证明图片或 PDF")}
+      ${evidenceUploadRow("roleDocument", "发布角色材料", draft.role === "landlord" ? "产权人与发布人关系材料" : "当前承租人身份材料")}
+      ${evidenceUploadRow("rightsDocument", "出租权材料", draft.role === "landlord" ? "产权证明" : "有效租约及转租授权")}
+      ${evidenceUploadRow("livePhotoChallenge", "房屋现场照片", "请使用上方拍摄或选择真实照片", "image/*")}
+    </section>
     <div class="flow-bottom"><button class="primary-button" data-action="scan-supply">确认房源 ${icon("arrow")}</button></div>
   </section>`;
 }
@@ -730,7 +775,7 @@ function matchScreen() {
       </div>
       <div class="home-composer">
         <textarea data-input="draft-text" name="rental-demand" autocomplete="off" aria-label="输入找房需求" placeholder="比如：静安寺附近，预算 3500 元，9 月入住…">${escapeHtml(state.draftText)}</textarea>
-        <div><button class="round-control voice-control ${state.listening ? "is-listening" : ""}" data-action="voice-input" aria-label="${state.listening ? "停止语音输入" : "语音输入"}" aria-pressed="${state.listening}" title="${state.listening ? "停止语音输入" : "语音输入"}">${icon("mic")}</button><button class="home-start" data-action="home-intake" data-bear-hover-for="home-bear">开始找房 ${icon("arrow")}</button></div>
+        <div><button class="round-control voice-control ${state.listening ? "is-listening" : ""}" data-action="voice-input" aria-label="${state.listening ? "停止语音输入" : "语音输入"}" aria-pressed="${state.listening}" title="${state.listening ? "停止语音输入" : "语音输入"}">${icon("mic")}</button><button class="home-start" data-action="home-intake" data-bear-hover-for="home-bear" ${state.intakeLoading ? "disabled" : ""}>${state.intakeLoading ? "AI 整理中" : `开始找房 ${icon("arrow")}`}</button></div>
       </div>
       <button class="home-supply-entry" data-action="create-supply">有房要出租 ${icon("arrow")}</button>
     </section>`;
@@ -758,7 +803,8 @@ function candidateCard(candidate, index) {
 }
 
 function tenantCard(candidate, index) {
-  return `<article class="tenant-card"><button data-action="contact-tenant"><span class="tenant-avatar">${candidate.tenant.alias.slice(0, 1)}</span><div class="tenant-main"><div><h2>${candidate.tenant.alias}</h2><b>${candidate.selectionLabel}</b></div><p>${candidate.tenant.occupation} · ${candidate.tenant.mandate.leaseMonths} 个月 · ${candidate.tenant.mandate.moveInWindow.from.slice(5)} 起</p><strong>¥${candidate.agreedRent.toLocaleString("zh-CN")} / 月</strong></div>${icon("arrow")}</button></article>`;
+  const alias = candidate.displayAlias || candidate.tenant.alias;
+  return `<article class="tenant-card"><button data-action="contact-tenant"><span class="tenant-avatar">${alias.slice(0, 1)}</span><div class="tenant-main"><div><h2>${escapeHtml(alias)}</h2><b>${candidate.selectionLabel}</b></div><p>${candidate.tenant.occupation} · ${candidate.tenant.mandate.leaseMonths} 个月 · ${candidate.tenant.mandate.moveInWindow.from.slice(5)} 起</p><strong>¥${candidate.agreedRent.toLocaleString("zh-CN")} / 月</strong></div>${icon("arrow")}</button></article>`;
 }
 
 function resultsScreen() {
@@ -771,7 +817,11 @@ function resultsScreen() {
       <h1>${heading}<span class="searching-dots" aria-hidden="true"><i></i><i></i><i></i></span></h1>
     </div></section>`;
   }
-  return `<section class="results-screen task-results-screen"><header><h1>${candidates.length} 个合适</h1>${state.task.delivered ? "" : '<span class="inline-search-state">还在找<span class="searching-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>'}</header>${candidates.length ? candidates.map((candidate, index) => state.task.kind === "renter" ? candidateCard(candidate, index) : tenantCard(candidate, index)).join("") : `<div class="empty-outcome"><b>这里空空如也</b></div>`}</section>`;
+  const continuous = state.task.remoteId && state.task.status === "active";
+  const searchState = continuous
+    ? '<span class="inline-search-state">持续匹配中<span class="searching-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>'
+    : state.task.delivered ? "" : '<span class="inline-search-state">还在找<span class="searching-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>';
+  return `<section class="results-screen task-results-screen"><header><h1>${candidates.length} 个合适</h1>${searchState}</header>${candidates.length ? candidates.map((candidate, index) => state.task.kind === "renter" ? candidateCard(candidate, index) : tenantCard(candidate, index)).join("") : `<div class="empty-outcome"><b>这里空空如也</b></div>`}</section>`;
 }
 
 function insightsScreen() {
@@ -1034,12 +1084,30 @@ function startVoiceInput() {
   voiceRecognition.start();
 }
 
-function beginIntake() {
+async function beginIntake() {
   if (!state.draftText.trim() && !state.selectedLocations.length) {
     showToast("先说说需求，或在地图上选区域");
     return;
   }
-  state.parsedDemand = parseDemandText(state.draftText, todayInShanghai());
+  state.intakeLoading = true;
+  render();
+  try {
+    if (state.draftText.trim()) {
+      const response = await parseRenterWithServer(state.draftText, todayInShanghai());
+      state.parsedDemand = response.parsed;
+      state.intakeProvider = response.provider;
+      state.syncError = response.warning || null;
+    } else {
+      state.parsedDemand = parseDemandText(state.selectedLocations.join("、"), todayInShanghai());
+      state.intakeProvider = "deterministic";
+      state.syncError = null;
+    }
+  } catch (error) {
+    state.parsedDemand = parseDemandText(state.draftText, todayInShanghai());
+    state.intakeProvider = "deterministic";
+    state.syncError = error.message;
+  }
+  state.intakeLoading = false;
   state.answers = defaultAnswers();
   seedAnswersFromParsed(state.parsedDemand);
   state.consent = false;
@@ -1048,12 +1116,24 @@ function beginIntake() {
   render();
 }
 
-function beginSupplyIntake() {
+async function beginSupplyIntake() {
   if (!state.supplyText.trim()) {
     showToast("先说说房源情况");
     return;
   }
-  state.parsedSupply = parseSupplyText(state.supplyText, todayInShanghai());
+  state.intakeLoading = true;
+  render();
+  try {
+    const response = await parseSupplyWithServer(state.supplyText, todayInShanghai());
+    state.parsedSupply = response.parsed;
+    state.intakeProvider = response.provider;
+    state.syncError = response.warning || null;
+  } catch (error) {
+    state.parsedSupply = parseSupplyText(state.supplyText, todayInShanghai());
+    state.intakeProvider = "deterministic";
+    state.syncError = error.message;
+  }
+  state.intakeLoading = false;
   seedSupplyFromParsed(state.parsedSupply);
   state.supplyPledge = false;
   state.supplyValidation = null;
@@ -1065,6 +1145,101 @@ function beginSupplyIntake() {
 function clearMatchTimers() {
   matchTimers.forEach((timer) => clearTimeout(timer));
   matchTimers = [];
+}
+
+function clearTaskPolling() {
+  if (taskPollTimer) window.clearInterval(taskPollTimer);
+  taskPollTimer = null;
+}
+
+function applyServerSnapshot(snapshot, { renderNow = true } = {}) {
+  if (!snapshot?.task) return;
+  const previous = state.task?.id === snapshot.task.id ? state.task : null;
+  const visualChanged = !previous ||
+    previous.status !== snapshot.task.status ||
+    previous.scanned !== snapshot.task.scanned ||
+    previous.suitable !== snapshot.task.suitable ||
+    previous.candidateVersion !== snapshot.task.candidateVersion;
+  state.task = {
+    ...(previous || {}),
+    id: snapshot.task.id,
+    remoteId: snapshot.task.id,
+    kind: snapshot.task.kind,
+    label: snapshot.task.label,
+    status: snapshot.task.status,
+    phaseIndex: 3,
+    scanned: snapshot.task.scanned,
+    suitable: snapshot.task.suitable,
+    total: snapshot.task.scanned,
+    finalSuitable: snapshot.task.suitable,
+    delivered: true,
+    statsCommitted: previous?.statsCommitted || false,
+    events: snapshot.events || [],
+    candidateVersion: snapshot.task.candidateVersion,
+    lastMatchAt: snapshot.task.lastMatchAt,
+    lifecycle: {
+      createdAt: snapshot.task.createdAt?.slice(0, 10) || todayInShanghai(),
+      expiresAt: snapshot.task.expiresAt?.slice(0, 10) || addDaysToIso(todayInShanghai(), 30),
+      renewalLeadDays: 5,
+      retentionDays: 30
+    }
+  };
+  const result = { scanned: snapshot.task.scanned, candidates: snapshot.candidates || [], audit: snapshot.events || [] };
+  if (snapshot.task.kind === "renter") state.result = result;
+  else state.supplyResult = result;
+  state.serverReady = true;
+  state.syncError = null;
+  if (renderNow && visualChanged) render();
+}
+
+function startTaskPolling(taskId) {
+  clearTaskPolling();
+  let polling = false;
+  const poll = async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      applyServerSnapshot(await getServerTask(taskId));
+    } catch (error) {
+      state.syncError = error.message;
+      render();
+    } finally {
+      polling = false;
+    }
+  };
+  taskPollTimer = window.setInterval(poll, 3000);
+}
+
+async function initializeServerState() {
+  try {
+    await ensureServerSession();
+    state.serverReady = true;
+    const knownId = state.task?.remoteId;
+    const { tasks } = await listServerTasks();
+    // The repository returns newest tasks first. Prefer the latest active task
+    // over a locally restored id, which may have been persisted by an older
+    // polling loop while the user was publishing a new mandate.
+    const selectedTask = tasks.find((task) => task.status === "active") ||
+      tasks.find((task) => task.id === knownId) ||
+      tasks[0];
+    if (selectedTask) {
+      applyServerSnapshot(await getServerTask(selectedTask.id));
+      if (selectedTask.status === "active") startTaskPolling(selectedTask.id);
+    } else {
+      // The previous prototype persisted a local demo task. Once the server is
+      // authoritative, never let that stale local object masquerade as a live
+      // task when this account has no active server task.
+      state.task = null;
+      state.result = null;
+      state.supplyResult = null;
+      state.activeCandidateId = null;
+      render();
+    }
+  } catch (error) {
+    state.serverReady = false;
+    state.syncError = error.message;
+    render();
+  }
 }
 
 function buildTask(kind, total, suitable, label) {
@@ -1084,11 +1259,21 @@ function buildTask(kind, total, suitable, label) {
   };
 }
 
-function startMatching(kind) {
+function startMatching(kind, remoteTask = null) {
   clearMatchTimers();
+  // A user can keep more than one live mandate. Stop polling the previous one
+  // before switching the home/results view to the task that was just published.
+  clearTaskPolling();
   const result = kind === "renter" ? state.result : state.supplyResult;
   const label = kind === "renter" ? mandateFromAnswers().locations.slice(0, 2).join(" / ") : `${state.supplyDraft.location}次卧`;
   state.task = buildTask(kind, result.scanned, result.candidates.length, label);
+  if (remoteTask) {
+    state.task.id = remoteTask.id;
+    state.task.remoteId = remoteTask.id;
+    state.task.status = remoteTask.status;
+    state.task.candidateVersion = remoteTask.candidateVersion;
+    state.task.lastMatchAt = remoteTask.lastMatchAt;
+  }
   state.stats.tasksCreated += 1;
   state.tab = "match";
   state.page = "root";
@@ -1105,7 +1290,10 @@ function startMatching(kind) {
       state.task.scanned = Math.min(result.scanned, Math.max(1, Math.round(result.scanned * ratio)));
       state.task.suitable = suitable;
       state.task.delivered = index === checkpoints.length - 1;
-      if (state.task.delivered) commitCompletedTask(result);
+      if (state.task.delivered) {
+        commitCompletedTask(result);
+        if (state.task.remoteId) startTaskPolling(state.task.remoteId);
+      }
       render();
     }, delay));
   });
@@ -1114,6 +1302,7 @@ function startMatching(kind) {
 
 function resetAll() {
   clearMatchTimers();
+  clearTaskPolling();
   state = {
     ...state,
     tab: "match",
@@ -1132,7 +1321,9 @@ function resetAll() {
     supplyDraft: freshSupplyDraft(),
     supplyPledge: false,
     supplyValidation: null,
-    photoPreviews: [{ src: "./assets/room-sunlit.jpg", label: "卧室" }],
+    supplyEvidenceRefs: {},
+    evidenceUploading: null,
+    photoPreviews: [],
     task: null,
     result: null,
     supplyResult: null,
@@ -1187,6 +1378,24 @@ app.addEventListener("input", (event) => {
 });
 
 app.addEventListener("change", async (event) => {
+  const evidenceInput = event.target.closest("[data-evidence-file]");
+  if (evidenceInput?.files?.length) {
+    const kind = evidenceInput.dataset.evidenceFile;
+    const file = evidenceInput.files[0];
+    state.evidenceUploading = kind;
+    render();
+    try {
+      const uploaded = await uploadEvidenceFile(file, kind);
+      state.supplyEvidenceRefs[kind] = uploaded.id;
+      state.supplyDraft.evidence[kind] = true;
+      state.evidenceUploading = null;
+      showToast("材料已私密上传");
+    } catch (error) {
+      state.evidenceUploading = null;
+      showToast(error.message || "材料上传失败");
+    }
+    return;
+  }
   const input = event.target.closest("[data-file]");
   if (!input?.files?.length) return;
   const files = [...input.files].slice(0, 6);
@@ -1196,9 +1405,20 @@ app.addEventListener("change", async (event) => {
     reader.readAsDataURL(file);
   })));
   state.photoPreviews = [...state.photoPreviews, ...previews].slice(-6);
-  state.supplyDraft.evidence.livePhotoChallenge = true;
-  state.sheet = null;
+  state.evidenceUploading = "livePhotoChallenge";
   render();
+  try {
+    const uploaded = await uploadEvidenceFile(files[0], "livePhotoChallenge");
+    state.supplyEvidenceRefs.livePhotoChallenge = uploaded.id;
+    state.supplyDraft.evidence.livePhotoChallenge = true;
+    state.evidenceUploading = null;
+    state.sheet = null;
+    showToast("现场照片已私密上传");
+  } catch (error) {
+    state.evidenceUploading = null;
+    state.photoPreviews = [];
+    showToast(error.message || "现场照片上传失败");
+  }
 });
 
 app.addEventListener("keydown", (event) => {
@@ -1235,7 +1455,7 @@ app.addEventListener("click", async (event) => {
     case "close-sheet":
     case "close-sheet-from-scrim": state.sheet = null; render(); break;
     case "create-renter": state.sheet = null; state.flow = "renter"; state.renterStage = "input"; render(); break;
-    case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); render(); break;
+    case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyEvidenceRefs = {}; state.photoPreviews = []; render(); break;
     case "cancel-flow": state.flow = null; state.page = "root"; render(); break;
     case "voice-input": startVoiceInput(); break;
     case "home-intake": beginIntake(); break;
@@ -1262,13 +1482,20 @@ app.addEventListener("click", async (event) => {
     case "toggle-consent": state.consent = target.checked; app.querySelector('[data-action="publish-mandate"]')?.toggleAttribute("disabled", !state.consent); break;
     case "publish-mandate": {
       if (!state.consent) { showToast("请先确认需求"); break; }
-      state.result = matchMandate(mandateFromAnswers(), marketplaceListings);
       target.disabled = true;
-      await launchBearAgent(app.querySelector('[data-bear-id="renter-review-bear"]'));
-      startMatching("renter");
+      try {
+        const snapshot = await createServerTask("renter", { mandate: mandateFromAnswers(), rawText: state.draftText });
+        state.result = { scanned: snapshot.task.scanned, candidates: snapshot.candidates, audit: snapshot.events || [] };
+        await launchBearAgent(app.querySelector('[data-bear-id="renter-review-bear"]'));
+        startMatching("renter", snapshot.task);
+      } catch (error) {
+        target.disabled = false;
+        showToast(error.message || "发布失败");
+      }
       break;
     }
     case "set-supply-role": state.supplyDraft.role = value; render(); break;
+    case "trigger-evidence": app.querySelector(`#evidence-${value}`)?.click(); break;
     case "set-supply-detail": {
       const key = target.dataset.key;
       if (["kitchen", "washer", "elevator", "ensuite"].includes(key)) {
@@ -1299,10 +1526,20 @@ app.addEventListener("click", async (event) => {
     case "toggle-supply-pledge": state.supplyPledge = target.checked; app.querySelector('[data-action="publish-supply"]')?.toggleAttribute("disabled", !(state.supplyPledge && validateSupplyDraft(state.supplyDraft).valid)); break;
     case "publish-supply": {
       if (!state.supplyPledge) { showToast("请先确认零中介承诺"); break; }
-      state.supplyResult = matchSupplyDraft(state.supplyDraft, marketplaceTenants);
       target.disabled = true;
-      await launchBearAgent(app.querySelector('[data-bear-id="supply-review-bear"]'));
-      startMatching("supply");
+      try {
+        const snapshot = await createServerTask("supply", {
+          draft: state.supplyDraft,
+          rawText: state.supplyText,
+          evidenceRefs: state.supplyEvidenceRefs
+        });
+        state.supplyResult = { scanned: snapshot.task.scanned, candidates: snapshot.candidates, audit: snapshot.events || [] };
+        await launchBearAgent(app.querySelector('[data-bear-id="supply-review-bear"]'));
+        startMatching("supply", snapshot.task);
+      } catch (error) {
+        target.disabled = false;
+        showToast(error.message || "发布失败");
+      }
       break;
     }
     case "open-candidate": state.activeCandidateId = target.dataset.id; state.page = "candidate"; render(); break;
@@ -1386,3 +1623,4 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 }
 
 render();
+void initializeServerState();

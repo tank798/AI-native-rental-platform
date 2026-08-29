@@ -1,4 +1,4 @@
-const CACHE_NAME = "zhunaer-app-shell";
+const CACHE_NAME = "zhunaer-app-shell-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -12,6 +12,7 @@ const APP_SHELL = [
   "./src/marketplace-corpus.mjs",
   "./src/fixtures.mjs",
   "./src/simulation-engine.mjs",
+  "./src/api-client.mjs",
   "./assets/app-icon.svg",
   "./assets/bear-agent.svg",
   "./assets/bear-agent-anchor.png",
@@ -35,6 +36,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  if (new URL(event.request.url).pathname.startsWith("/api/")) return;
   event.respondWith(
     fetch(event.request, { cache: "no-store" })
       .then((response) => {

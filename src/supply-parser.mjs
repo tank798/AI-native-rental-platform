@@ -36,18 +36,21 @@ export function parseSupplyText(rawText, referenceDate = MARKET_REFERENCE_DATE) 
     : /现租客|当前租客|个人转租|自己住|现在住这儿的租客|住的房间/.test(text)
       ? "subletter"
       : null;
-  const brokerSignal = /经纪人|中介|公寓管家|统一带看/.test(text) && !/不是中介|0中介费/.test(text.replace(/账号实际由经纪人|经纪人统一带看/g, "经纪人"));
+  const brokerDenial = /不是中介|非中介|无中介|没有中介|(?:不收(?:取)?|免|零|0\s*)(?:任何)?中介费/.test(text);
+  const brokerSignal = /经纪人|中介|公寓管家|统一带看/.test(text) && !brokerDenial;
   const explicitBroker = /账号实际由经纪人|经纪人统一带看|中介代发|公寓管家/.test(text);
   const role = explicitBroker || brokerSignal ? "broker" : claimedRole;
   const area = marketplaceAreas.find((item) => text.includes(item.location) || text.includes(item.station));
   const listedRent = amount(text, /(?:月租|房租|租金|挂牌|\|)\s*[：:]?\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*(k|千)?(?:元|rmb|\/月|每月)?/i)
     ?? amount(text, /(?:^|[，,；;｜|\s])\s*(\d{4,5})\s*(k|千)?\s*(?:元每月|元\/月|rmb\/月|\/月|[｜|\s])/i);
   const minRent = amount(text, /(?:最低|底价|可聊到|可以|诚心的话|长租可以|授权最低)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*(k|千)?/i);
+  const zeroServiceFee = /0\s*服务费|零服务费|无服务费|免服务费|不收(?:取)?(?:任何)?服务费|不收(?:取)?(?:任何)?中介费服务费/.test(text);
+  const zeroIntermediaryFee = /0\s*中介费|零中介费|无中介费|免中介费|不是中介|不收(?:取)?(?:任何)?中介费/.test(text);
   const serviceFee = amount(text, /(?:服务费|带看费|签约费)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*(k|千)?/i)
     ?? amount(text, /(?:另收|收取)?\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*(k|千)?\s*(?:元)?(?:服务费|带看费|签约费)/i)
-    ?? (/0服务费/.test(text) ? 0 : null);
+    ?? (zeroServiceFee ? 0 : null);
   const intermediaryFee = amount(text, /(?:中介费)\s*[¥￥]?\s*(\d+(?:\.\d+)?)\s*(k|千)?/i)
-    ?? (/0中介费|不是中介/.test(text) ? 0 : null);
+    ?? (zeroIntermediaryFee ? 0 : null);
   const roommateCount = parseRoommateCount(text);
   const roommateGender = /女生室友|位女生/.test(text) ? "female" : /男生室友|位男生/.test(text) ? "male" : null;
   const floorMatch = text.match(/(\d{1,2})\s*(?:\/|楼\/|层\/)(\d{1,2})\s*(?:楼|层)?/);

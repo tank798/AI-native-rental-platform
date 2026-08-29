@@ -50,6 +50,12 @@ export function renterIntakePrompt(renters) {
   };
 }
 
+export function renterRuntimePrompt(text, referenceDate) {
+  const prompt = renterIntakePrompt([{ id: "runtime", text }]);
+  prompt.user = `参考日期：${referenceDate}，时区：Asia/Shanghai。\n请只结构化这一位租客：\n${stringify([{ id: "runtime", text }])}`;
+  return prompt;
+}
+
 const supplyPrinciples = [
   "只允许 landlord（房东本人）或 subletter（当前租客转租）；broker、manager、agent 均为禁止角色。",
   "租金、押金、服务费、中介费和水电类型必须分字段记录；未知就填 null。",
@@ -75,6 +81,12 @@ export function supplyNormalizePrompt(listings) {
     }),
     user: `参考日期：2026-08-24，时区：Asia/Shanghai。\n请结构化以下 10 套房源。private_min_rent 属于私密字段：\n${stringify(listings)}`
   };
+}
+
+export function supplyRuntimePrompt(text, referenceDate) {
+  const prompt = supplyNormalizePrompt([{ id: "runtime", text }]);
+  prompt.user = `参考日期：${referenceDate}，时区：Asia/Shanghai。\n请只结构化这一套房源。不要把用户自述当作平台已核验证据：\n${stringify([{ id: "runtime", text }])}`;
+  return prompt;
 }
 
 export function riskAuditPrompt(listings) {

@@ -423,7 +423,7 @@ export function validateSupplyDraft(draft) {
   };
 }
 
-function listingFromSupplyDraft(draft, mandate, index) {
+export function listingFromSupplyDraft(draft, mandate, index) {
   const requestedNearListing = (mandate.locations || []).some((place) => {
     const wanted = normalizePlace(place);
     return [draft.location, draft.station, draft.district, draft.address]

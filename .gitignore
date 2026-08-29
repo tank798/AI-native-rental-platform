@@ -8,7 +8,8 @@ node_modules/
 
 # Local tooling and test artifacts
 .playwright-cli/
-output/playwright/
+output/playwright/*
+!output/playwright/[0-9][0-9]-*.png
 .agents/
 skills-lock.json
 evals/results/*.json
@@ -23,3 +24,4 @@ evals/results/*.raw.*
 .cache/
 dist/
 build/
+data/

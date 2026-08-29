@@ -856,6 +856,14 @@ button { cursor: pointer; }
   font-weight: 620;
 }
 
+.intake-source {
+  display: block;
+  margin-top: 10px;
+  color: #8b9098;
+  font-size: 10px;
+  font-weight: 620;
+}
+
 .chat-line.is-form {
   align-items: flex-start;
 }
@@ -1045,10 +1053,53 @@ button { cursor: pointer; }
 }
 
 .conversational-photo {
-  margin: 0 18px 96px;
+  margin: 0 18px;
   padding-right: 0;
   padding-left: 0;
   border-top: 1px solid #e7e8eb;
+}
+
+.evidence-upload-panel {
+  margin: 0 18px 96px;
+  padding-top: 18px;
+}
+
+.evidence-upload-panel .section-title > span {
+  color: #8b9098;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.evidence-upload-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 66px;
+  border-bottom: 1px solid #ececef;
+}
+
+.evidence-upload-row > span {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f0f0f2;
+  display: grid;
+  place-items: center;
+}
+
+.evidence-upload-row > span .icon { width: 16px; }
+.evidence-upload-row.is-complete > span { background: #e9f7ef; color: #16824b; }
+.evidence-upload-row b { display: block; font-size: 14px; }
+.evidence-upload-row p { margin: 3px 0 0; color: #8b9098; font-size: 11px; }
+.evidence-upload-row > button {
+  min-width: 54px;
+  height: 34px;
+  border: 1px solid #d8d9dd;
+  border-radius: 999px;
+  background: white;
+  font-size: 12px;
+  font-weight: 760;
 }
 
 .flow-kicker {
