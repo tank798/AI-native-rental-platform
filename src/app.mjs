@@ -24,6 +24,7 @@ import {
 import {
   createServerTask,
   ensureServerSession,
+  getServerHealth,
   getServerTask,
   listServerTasks,
   parseRenterWithServer,
@@ -229,6 +230,8 @@ function initialProductState() {
     intakeLoading: false,
     serverReady: false,
     syncError: null,
+    marketMode: "real",
+    demoBanner: false,
     photoPreviews: [],
     task: null,
     result: null,
@@ -1033,7 +1036,10 @@ function render() {
   const immersive = Boolean(state.flow) || state.page !== "root";
   const viewKey = [state.tab, state.flow, state.renterStage, state.supplyStage, state.page, state.activeCandidateId, state.sheet].join(":");
   const content = state.flow === "renter" ? renterFlow() : state.flow === "supply" ? supplyFlow() : state.page === "candidate" ? candidateDetail() : rootScreen();
-  app.innerHTML = `<div class="device"><div class="app-shell">${statusBar()}<main id="app-main" class="screen-scroll ${immersive ? "immersive" : ""}" tabindex="-1">${content}</main>${immersive ? "" : tabBar()}${activeSheet()}${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}</div></div>`;
+  const demoBanner = state.demoBanner
+    ? '<div class="demo-mode-banner" role="status">演示模式 · 当前候选包含测试语料</div>'
+    : "";
+  app.innerHTML = `<div class="device"><div class="app-shell">${statusBar()}${demoBanner}<main id="app-main" class="screen-scroll ${immersive ? "immersive" : ""}" tabindex="-1">${content}</main>${immersive ? "" : tabBar()}${activeSheet()}${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}</div></div>`;
   const main = app.querySelector("#app-main");
   if (main) main.scrollTop = viewKey === lastViewKey ? previousScrollTop : 0;
   lastViewKey = viewKey;
@@ -1212,6 +1218,9 @@ function startTaskPolling(taskId) {
 
 async function initializeServerState() {
   try {
+    const health = await getServerHealth();
+    state.marketMode = health.marketMode || "real";
+    state.demoBanner = Boolean(health.demoBanner);
     await ensureServerSession();
     state.serverReady = true;
     const knownId = state.task?.remoteId;

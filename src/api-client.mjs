@@ -41,6 +41,11 @@ export async function ensureServerSession() {
   }
 }
 
+export async function getServerHealth() {
+  const response = await fetch("/api/health", { cache: "no-store" });
+  return responseJson(response);
+}
+
 async function apiRequest(path, options = {}, retried = false) {
   const session = await ensureServerSession();
   const response = await fetch(path, {

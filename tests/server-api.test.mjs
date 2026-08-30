@@ -51,6 +51,8 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   const health = await request(baseUrl, "/api/health");
   assert.equal(health.payload.database, "sqlite");
   assert.equal(health.payload.continuousMatching, true);
+  assert.equal(health.payload.marketMode, "real");
+  assert.equal(health.payload.demoBanner, false);
 
   const mandate = structuredClone(baseMandate);
   mandate.locations = ["临港新城"];

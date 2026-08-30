@@ -119,6 +119,19 @@ button { cursor: pointer; }
 .status-icons b { margin-left: 3px; font-size: 11px; }
 .battery { width: 19px; height: 9px; margin-left: 4px; border: 1.5px solid currentColor; border-radius: 3px; box-shadow: inset 0 0 0 1.5px white; background: currentColor; }
 
+.demo-mode-banner {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 6px 16px;
+  background: #fff3cd;
+  border-block: 1px solid #ead392;
+  color: #6d4d00;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
 .root-header {
   display: flex;
   align-items: center;

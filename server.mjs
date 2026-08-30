@@ -10,6 +10,7 @@ import { validateSupplyDraft } from "./src/simulation-engine.mjs";
 import { openRentalDatabase } from "./src/server/database.mjs";
 import { createIntakeService } from "./src/server/intake-service.mjs";
 import { createMatchingService } from "./src/server/matching-service.mjs";
+import { normalizeMarketMode, readRuntimeConfig } from "./src/server/runtime-config.mjs";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const JSON_LIMIT = 14 * 1024 * 1024;
@@ -119,19 +120,22 @@ const contentTypes = new Map([
   [".webmanifest", "application/manifest+json; charset=utf-8"]
 ]);
 
-export function createRentalServer({
-  databasePath = path.join(rootDir, "data", "rental.sqlite"),
-  uploadRoot = path.join(rootDir, "data", "uploads"),
-  aiApiKey = process.env.SILICONFLOW_API_KEY || null,
-  aiKeyFile = process.env.SILICONFLOW_API_KEY_FILE || null,
-  aiModel = process.env.SILICONFLOW_MODEL || undefined,
-  enableScheduler = true,
-  schedulerMs = 10_000
-} = {}) {
+export function createRentalServer(options = {}) {
+  const environment = options.environment || process.env;
+  const runtimeConfig = readRuntimeConfig(environment);
+  const databasePath = options.databasePath || runtimeConfig.databasePath || path.join(rootDir, "data", "rental.sqlite");
+  const uploadRoot = options.uploadRoot || runtimeConfig.uploadDirectory || path.join(rootDir, "data", "uploads");
+  const aiApiKey = options.aiApiKey ?? environment.SILICONFLOW_API_KEY ?? null;
+  const aiKeyFile = options.aiKeyFile ?? environment.SILICONFLOW_API_KEY_FILE ?? null;
+  const aiModel = options.aiModel ?? environment.SILICONFLOW_MODEL ?? undefined;
+  const enableScheduler = options.enableScheduler ?? true;
+  const schedulerMs = options.schedulerMs ?? 10_000;
+  const marketMode = normalizeMarketMode(options.marketMode ?? runtimeConfig.marketMode);
+
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   fs.mkdirSync(uploadRoot, { recursive: true });
   const repository = openRentalDatabase(databasePath);
-  const matching = createMatchingService(repository);
+  const matching = createMatchingService(repository, { marketMode });
   const intake = createIntakeService({ apiKey: aiApiKey, keyFile: aiKeyFile, model: aiModel });
   let scheduler = null;
 
@@ -213,7 +217,14 @@ export function createRentalServer({
 
   async function handleApi(request, response, url) {
     if (request.method === "GET" && url.pathname === "/api/health") {
-      return json(response, 200, { ok: true, database: "sqlite", ai: intake.status(), continuousMatching: true });
+      return json(response, 200, {
+        ok: true,
+        database: "sqlite",
+        ai: intake.status(),
+        continuousMatching: true,
+        marketMode,
+        demoBanner: marketMode === "demo"
+      });
     }
     if (request.method === "POST" && url.pathname === "/api/session") {
       const id = randomUUID();
@@ -324,6 +335,7 @@ if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1] || "")) {
     .then(() => {
       const ai = app.intake.status();
       console.log(`住哪儿服务已启动：http://${host}:${port}`);
+      console.log(`市场模式：${app.matching.marketMode === "demo" ? "演示语料" : "真实用户任务"}`);
       console.log(ai.configured ? `运行时 AI：${ai.model}` : "运行时 AI：确定性安全模式（配置 SILICONFLOW_API_KEY_FILE 可启用模型）");
     })
     .catch((error) => {

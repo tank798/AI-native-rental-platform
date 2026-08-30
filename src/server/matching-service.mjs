@@ -4,6 +4,7 @@ import {
   matchMandate,
   matchSupplyDraft
 } from "../simulation-engine.mjs";
+import { normalizeMarketMode } from "./runtime-config.mjs";
 
 function renterLabel(task) {
   return `租客 ${task.id.slice(0, 6)}`;
@@ -22,14 +23,17 @@ function publicListing(candidate) {
 
   return {
     ...candidate,
+    counterpartyType: isUserListing ? "task" : "fixture",
     listing
   };
 }
 
 function publicTenant(candidate) {
   const tenant = candidate.tenant;
+  const isUserTenant = Boolean(tenant.__taskId);
   return {
     ...candidate,
+    counterpartyType: isUserTenant ? "task" : "fixture",
     displayAlias: candidate.displayAlias || tenant.alias,
     tenant: {
       id: tenant.id,
@@ -51,7 +55,14 @@ function candidateCounterparty(candidate, fallbackPrefix) {
   return candidate.tenant.__taskId || `${fallbackPrefix}:${candidate.tenant.id}`;
 }
 
-export function createMatchingService(repository) {
+/**
+ * Creates the synchronous matching facade for the selected market mode.
+ * Real mode only compares persisted tasks; demo mode additionally scans the
+ * fixture corpus so product demonstrations remain available and explicit.
+ */
+export function createMatchingService(repository, { marketMode = "real" } = {}) {
+  const normalizedMarketMode = normalizeMarketMode(marketMode);
+
   function renterPool(task) {
     const userListings = repository.listOppositeTasks("renter", task.ownerId).map((supplyTask, index) => {
       const listing = listingFromSupplyDraft(supplyTask.payload.draft, task.payload.mandate, index);
@@ -64,7 +75,9 @@ export function createMatchingService(repository) {
         __ownerId: supplyTask.ownerId
       };
     });
-    return [...marketplaceListings, ...userListings];
+    return normalizedMarketMode === "demo"
+      ? [...marketplaceListings, ...userListings]
+      : userListings;
   }
 
   function supplyPool(task) {
@@ -76,7 +89,9 @@ export function createMatchingService(repository) {
       __taskId: renterTask.id,
       __ownerId: renterTask.ownerId
     }));
-    return [...marketplaceTenants, ...userTenants];
+    return normalizedMarketMode === "demo"
+      ? [...marketplaceTenants, ...userTenants]
+      : userTenants;
   }
 
   function processRenter(task) {
@@ -145,6 +160,7 @@ export function createMatchingService(repository) {
   }
 
   return {
+    marketMode: normalizedMarketMode,
     processTask,
     processAfterTaskCreated,
     processAllActive,
