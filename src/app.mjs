@@ -31,6 +31,7 @@ import {
   parseSupplyWithServer,
   uploadEvidenceFile
 } from "./api-client.mjs";
+import { escapeAttribute, escapeText } from "./ui/safe-markup.mjs";
 
 const app = document.querySelector("#app");
 
@@ -74,13 +75,11 @@ function icon(name, className = "") {
   return `<svg class="icon ${className}" viewBox="0 0 24 24" aria-hidden="true">${iconPaths[name] || iconPaths.spark}</svg>`;
 }
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+const escapeHtml = escapeText;
+
+function formatInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number).toLocaleString("zh-CN") : "—";
 }
 
 function todayInShanghai() {
@@ -513,7 +512,7 @@ function renterInput() {
       </div>
     </div>
     <button class="map-entry" data-action="open-location">
-      <span>${icon("map")}<b>${state.selectedLocations.length ? state.selectedLocations.join("、") : "也可以直接在地图上选"}</b></span>${icon("arrow")}
+      <span>${icon("map")}<b>${state.selectedLocations.length ? escapeText(state.selectedLocations.join("、")) : "也可以直接在地图上选"}</b></span>${icon("arrow")}
     </button>
   </section>`;
 }
@@ -527,7 +526,7 @@ function coreQuestionCard(key, index) {
   const controls = {
     location: {
       title: "想住在哪一带？",
-      body: `<button class="location-picker-row" data-action="open-location"><span>${icon("map")}<b>${state.selectedLocations.length ? state.selectedLocations.join("、") : "打开地图选择"}</b></span>${icon("arrow")}</button>`
+      body: `<button class="location-picker-row" data-action="open-location"><span>${icon("map")}<b>${state.selectedLocations.length ? escapeText(state.selectedLocations.join("、")) : "打开地图选择"}</b></span>${icon("arrow")}</button>`
     },
     budget: {
       title: "月租控制在多少？",
@@ -543,7 +542,7 @@ function coreQuestionCard(key, index) {
     },
     commute: {
       title: "最长通勤多久？",
-      body: `<div class="range-control"><output id="commute-value">${state.answers.commute} 分钟</output><input type="range" min="15" max="60" step="5" data-input="commute-range" value="${state.answers.commute}" /><div><span>15</span><span>60 分钟</span></div></div>`
+      body: `<div class="range-control"><output id="commute-value">${escapeText(state.answers.commute)} 分钟</output><input type="range" min="15" max="60" step="5" data-input="commute-range" value="${escapeAttribute(state.answers.commute)}" /><div><span>15</span><span>60 分钟</span></div></div>`
     }
   };
   const control = controls[key];
@@ -576,11 +575,11 @@ function renterClarify() {
       <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "<span>等你补充</span>"}</div><small class="intake-source">${state.intakeProvider === "siliconflow" ? "AI 结构化 · 规则复核" : "确定性解析 · 安全模式"}</small></div></div>
       <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble dialogue-card"><b>${escapeHtml(aiQuestion || "再确认一下")}</b>
         <div class="dialogue-fields">
-          ${field("location", "区域", `<button class="dialogue-location" data-action="open-location"><span>${state.selectedLocations.length ? state.selectedLocations.join("、") : "打开地图选择"}</span>${icon("arrow")}</button>`)}
+          ${field("location", "区域", `<button class="dialogue-location" data-action="open-location"><span>${state.selectedLocations.length ? escapeText(state.selectedLocations.join("、")) : "打开地图选择"}</span>${icon("arrow")}</button>`)}
           ${field("budget", "预算", `<div class="paired-inputs"><label><span>理想</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-min" value="${escapeHtml(state.answers.budgetMin)}" placeholder="3000" /></div></label><i>—</i><label><span>最高</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-max" value="${escapeHtml(state.answers.budgetMax)}" placeholder="4000" /></div></label></div>`)}
           ${field("moveIn", "入住", `<div class="paired-inputs date-pair"><label><span>最早</span><input type="date" min="${today}" data-input="move-in-from" value="${escapeHtml(state.answers.moveInFrom)}" /></label><i>—</i><label><span>最晚</span><input type="date" min="${escapeHtml(state.answers.moveInFrom || today)}" data-input="move-in-to" value="${escapeHtml(state.answers.moveInTo)}" /></label></div>`)}
           ${field("housing", "居住", `<div class="choice-grid">${answerChip("roommate", "no_share", "整租")}${answerChip("roommate", "female", "女生合租")}${answerChip("roommate", "male", "男生合租")}${answerChip("roommate", "any", "不限")}</div>`)}
-          ${field("commute", "通勤", `<div class="range-control"><output id="commute-value">${state.answers.commute} 分钟</output><input type="range" min="15" max="60" step="5" data-input="commute-range" value="${state.answers.commute}" /><div><span>15</span><span>60 分钟</span></div></div>`)}
+          ${field("commute", "通勤", `<div class="range-control"><output id="commute-value">${escapeText(state.answers.commute)} 分钟</output><input type="range" min="15" max="60" step="5" data-input="commute-range" value="${escapeAttribute(state.answers.commute)}" /><div><span>15</span><span>60 分钟</span></div></div>`)}
           ${field("lease", "租期", `<div class="choice-grid is-four">${answerChip("leaseMonths", "3", "3 个月")}${answerChip("leaseMonths", "6", "6 个月")}${answerChip("leaseMonths", "12", "1 年")}${answerChip("leaseMonths", "any", "不限")}</div>`)}
           ${field("floor", "楼层", `<div class="choice-grid is-four">${answerChip("floor", "low", "低层")}${answerChip("floor", "middle", "中层")}${answerChip("floor", "high", "高层")}${answerChip("floor", "any", "不限")}</div>`)}
           ${field("exposure", "朝向", `<div class="choice-grid is-four">${answerChip("exposure", "south", "朝南")}${answerChip("exposure", "east", "朝东")}${answerChip("exposure", "west", "朝西")}${answerChip("exposure", "any", "不限")}</div>`)}
@@ -610,7 +609,7 @@ function renterReview() {
   const viewing = { weekday_evening: "工作日晚", weekend: "周末", any: "时间灵活" }[state.answers.viewing];
   return `<section class="flow-screen">
     ${flowHeader("确认找房任务")}
-    <div class="review-title"><span class="flow-kicker">即将启动</span><h1>${mandate.locations.join("、")}</h1></div>
+    <div class="review-title"><span class="flow-kicker">即将启动</span><h1>${escapeText(mandate.locations.join("、"))}</h1></div>
     <dl class="review-list">
       <div><dt>预算</dt><dd>${budget} / 月</dd></div>
       <div><dt>入住</dt><dd>${dates}</dd></div>
@@ -695,7 +694,7 @@ function supplyDraftScreen() {
   const draft = state.supplyDraft;
   const roleLabel = draft.role === "landlord" ? "房东本人" : draft.role === "subletter" ? "当前租客" : draft.role === "broker" ? "疑似中介" : "身份待确认";
   const tags = [roleLabel, draft.location, draft.listedRent ? `¥${draft.listedRent}/月` : null, draft.availableFrom].filter(Boolean);
-  const locations = marketplaceAreas.map((area) => `<option value="${area.location}" ${area.location === draft.location ? "selected" : ""}>${area.location} · ${area.station}</option>`).join("");
+  const locations = marketplaceAreas.map((area) => `<option value="${escapeAttribute(area.location)}" ${area.location === draft.location ? "selected" : ""}>${escapeText(area.location)} · ${escapeText(area.station)}</option>`).join("");
   return `<section class="flow-screen">
     ${flowHeader("和出租分身确认")}
     <div class="rental-chat supply-chat">
@@ -706,10 +705,10 @@ function supplyDraftScreen() {
           <div class="dialogue-field"><b>身份</b><div class="role-options"><button data-action="set-supply-role" data-value="landlord" aria-pressed="${draft.role === "landlord"}">房东本人</button><button data-action="set-supply-role" data-value="subletter" aria-pressed="${draft.role === "subletter"}">当前租客</button></div></div>
           <div class="dialogue-field"><b>区域</b><select data-input="supply-location" aria-label="房源区域"><option value="">请选择</option>${locations}</select></div>
           <div class="dialogue-field"><b>房源</b><div class="stacked-inputs"><label><span>一句话</span><input data-input="supply-title" value="${escapeHtml(draft.title)}" /></label><label><span>完整地址</span><textarea data-input="supply-address">${escapeHtml(draft.address)}</textarea></label></div></div>
-          <div class="dialogue-field"><b>租金</b><div class="paired-inputs"><label><span>挂牌</span><div class="money-input"><b>¥</b><input type="number" inputmode="numeric" data-input="supply-rent" value="${draft.listedRent || ""}" /></div></label><i>—</i><label><span>最低授权</span><div class="money-input"><b>¥</b><input type="number" inputmode="numeric" data-input="supply-min-rent" value="${draft.minimumAuthorizedRent || ""}" /></div></label></div></div>
+          <div class="dialogue-field"><b>租金</b><div class="paired-inputs"><label><span>挂牌</span><div class="money-input"><b>¥</b><input type="number" inputmode="numeric" data-input="supply-rent" value="${escapeAttribute(draft.listedRent || "")}" /></div></label><i>—</i><label><span>最低授权</span><div class="money-input"><b>¥</b><input type="number" inputmode="numeric" data-input="supply-min-rent" value="${escapeAttribute(draft.minimumAuthorizedRent || "")}" /></div></label></div></div>
           <div class="dialogue-field"><b>入住与租期</b><div class="paired-inputs"><label><span>可入住</span><input type="date" min="${todayInShanghai()}" data-input="supply-available" value="${escapeHtml(draft.availableFrom)}" /></label><i>—</i><label><span>最短租期</span><select data-input="supply-lease"><option value="3" ${draft.leaseMonthsMin === 3 ? "selected" : ""}>3 个月</option><option value="6" ${draft.leaseMonthsMin === 6 ? "selected" : ""}>6 个月</option><option value="12" ${draft.leaseMonthsMin === 12 ? "selected" : ""}>1 年</option></select></label></div></div>
-          <div class="dialogue-field"><b>房间</b><div class="triple-inputs"><label><span>面积</span><input type="number" data-input="supply-area" value="${draft.areaSqm || ""}" /></label><label><span>楼层</span><input type="number" data-input="supply-floor" value="${draft.floor || ""}" /></label><label><span>总层</span><input type="number" data-input="supply-total-floors" value="${draft.totalFloors || ""}" /></label></div></div>
-          <div class="dialogue-field"><b>室友</b><div class="roommate-controls"><input type="number" min="0" max="8" data-input="supply-roommate-count" aria-label="室友人数" value="${draft.roommateCount}" /><div class="choice-grid is-three">${supplyChoice("roommateGender", "female", "女生", draft.roommateGender)}${supplyChoice("roommateGender", "male", "男生", draft.roommateGender)}${supplyChoice("roommateGender", "any", "不限", draft.roommateGender || "any")}</div></div></div>
+          <div class="dialogue-field"><b>房间</b><div class="triple-inputs"><label><span>面积</span><input type="number" data-input="supply-area" value="${escapeAttribute(draft.areaSqm || "")}" /></label><label><span>楼层</span><input type="number" data-input="supply-floor" value="${escapeAttribute(draft.floor || "")}" /></label><label><span>总层</span><input type="number" data-input="supply-total-floors" value="${escapeAttribute(draft.totalFloors || "")}" /></label></div></div>
+          <div class="dialogue-field"><b>室友</b><div class="roommate-controls"><input type="number" min="0" max="8" data-input="supply-roommate-count" aria-label="室友人数" value="${escapeAttribute(draft.roommateCount)}" /><div class="choice-grid is-three">${supplyChoice("roommateGender", "female", "女生", draft.roommateGender)}${supplyChoice("roommateGender", "male", "男生", draft.roommateGender)}${supplyChoice("roommateGender", "any", "不限", draft.roommateGender || "any")}</div></div></div>
           <div class="dialogue-field"><b>朝向</b><div class="choice-grid is-four">${supplyChoice("exposure", "south", "朝南", draft.facilities.exposure)}${supplyChoice("exposure", "east", "朝东", draft.facilities.exposure)}${supplyChoice("exposure", "west", "朝西", draft.facilities.exposure)}${supplyChoice("exposure", "unknown", "不限", draft.facilities.exposure)}</div></div>
           <div class="dialogue-field"><b>设施</b><div class="supply-facility-grid">${supplyChoice("kitchen", "true", "厨房", String(draft.facilities.kitchen))}${supplyChoice("washer", "true", "洗衣机", String(draft.facilities.washer))}${supplyChoice("elevator", "true", "电梯", String(draft.facilities.elevator))}${supplyChoice("ensuite", "true", "独卫", String(draft.facilities.ensuite))}</div></div>
           <div class="dialogue-field"><b>洗衣机</b><div class="choice-grid is-three">${supplyChoice("washerType", "drum", "滚筒", draft.facilities.washerType)}${supplyChoice("washerType", "pulsator", "波轮", draft.facilities.washerType)}${supplyChoice("washerType", "unknown", "不限", draft.facilities.washerType)}</div></div>
@@ -718,7 +717,7 @@ function supplyDraftScreen() {
         </div>
       </div></div>
     </div>
-    <section class="form-section photo-section conversational-photo"><div class="section-title"><h2>房源现场</h2><button data-action="open-photo-source">添加</button></div><div class="photo-grid">${state.photoPreviews.map((photo) => `<figure><img src="${photo.src}" width="240" height="180" loading="lazy" alt="${escapeHtml(photo.label)}"/><figcaption>${escapeHtml(photo.label)}</figcaption></figure>`).join("")}<button class="add-photo" data-action="open-photo-source">${icon("plus")}<span>拍摄或选择</span></button></div></section>
+    <section class="form-section photo-section conversational-photo"><div class="section-title"><h2>房源现场</h2><button data-action="open-photo-source">添加</button></div><div class="photo-grid">${state.photoPreviews.map((photo) => `<figure><img src="${escapeAttribute(photo.src)}" width="240" height="180" loading="lazy" alt="${escapeAttribute(photo.label)}"/><figcaption>${escapeText(photo.label)}</figcaption></figure>`).join("")}<button class="add-photo" data-action="open-photo-source">${icon("plus")}<span>拍摄或选择</span></button></div></section>
     <section class="form-section evidence-upload-panel"><div class="section-title"><h2>发布材料</h2><span>仅用于平台核验</span></div>
       ${evidenceUploadRow("identity", "身份材料", "身份证明图片或 PDF")}
       ${evidenceUploadRow("roleDocument", "发布角色材料", draft.role === "landlord" ? "产权人与发布人关系材料" : "当前承租人身份材料")}
@@ -741,9 +740,9 @@ function supplyReviewScreen() {
   return `<section class="flow-screen">
     ${flowHeader("确认出租任务")}
     <div class="review-title"><h1>${escapeHtml(state.supplyDraft.location)}个人房源</h1></div>
-    <dl class="review-list"><div><dt>身份</dt><dd>${state.supplyDraft.role === "landlord" ? "房东本人" : "当前租客"}</dd></div><div><dt>挂牌</dt><dd>¥${state.supplyDraft.listedRent.toLocaleString("zh-CN")} / 月</dd></div><div><dt>入住</dt><dd>${state.supplyDraft.availableFrom}</dd></div><div><dt>租期</dt><dd>至少 ${state.supplyDraft.leaseMonthsMin} 个月</dd></div><div><dt>房间</dt><dd>${state.supplyDraft.areaSqm}㎡ · ${state.supplyDraft.floor}/${state.supplyDraft.totalFloors} 层</dd></div><div><dt>室友</dt><dd>${roommate}</dd></div><div><dt>设施</dt><dd>${facilities}</dd></div></dl>
+    <dl class="review-list"><div><dt>身份</dt><dd>${state.supplyDraft.role === "landlord" ? "房东本人" : "当前租客"}</dd></div><div><dt>挂牌</dt><dd>¥${state.supplyDraft.listedRent.toLocaleString("zh-CN")} / 月</dd></div><div><dt>入住</dt><dd>${escapeText(state.supplyDraft.availableFrom)}</dd></div><div><dt>租期</dt><dd>至少 ${escapeText(state.supplyDraft.leaseMonthsMin)} 个月</dd></div><div><dt>房间</dt><dd>${escapeText(state.supplyDraft.areaSqm)}㎡ · ${escapeText(state.supplyDraft.floor)}/${escapeText(state.supplyDraft.totalFloors)} 层</dd></div><div><dt>室友</dt><dd>${escapeText(roommate)}</dd></div><div><dt>设施</dt><dd>${escapeText(facilities)}</dd></div></dl>
     <section class="private-panel"><header>${icon("lock")}<h2>议价范围</h2></header><div><span><b>¥${state.supplyDraft.listedRent.toLocaleString("zh-CN")}</b>挂牌</span><span><b>¥${state.supplyDraft.minimumAuthorizedRent.toLocaleString("zh-CN")}</b>底价</span></div></section>
-    ${validation.errors.length ? `<div class="error-banner">${validation.errors.join("；")}</div>` : ""}
+    ${validation.errors.length ? `<div class="error-banner">${escapeText(validation.errors.join("；"))}</div>` : ""}
     <label class="consent-row"><input type="checkbox" name="zero-fee-pledge" data-action="toggle-supply-pledge" ${state.supplyPledge ? "checked" : ""}/><span>不收取任何中介费或服务费</span></label>
     <div class="launch-preview">${bearAgentMarkup({ id: "supply-review-bear", mode: "idle", compact: true, label: "等待出发的出租小熊" })}<span>准备出发</span></div>
     <div class="flow-bottom"><button class="primary-button" data-action="publish-supply" data-bear-hover-for="supply-review-bear" ${state.supplyPledge && validation.valid ? "" : "disabled"}>交给小熊</button></div>
@@ -787,7 +786,7 @@ function matchScreen() {
   return `<section class="match-home">
     ${matchingVisual(state.task.kind)}
     <div class="agent-status" role="status" aria-live="polite"><p>${title}</p></div>
-    <div class="match-metrics"><span><b>${state.task.scanned}</b>已查看</span><span><b>${state.task.suitable}</b>合适</span></div>
+    <div class="match-metrics"><span><b>${escapeText(state.task.scanned)}</b>已查看</span><span><b>${escapeText(state.task.suitable)}</b>合适</span></div>
   </section>`;
 }
 
@@ -799,15 +798,19 @@ function roomVisualClass(listingId) {
 
 function candidateCard(candidate, index) {
   const listing = candidate.listing;
-  return `<article class="candidate-card"><button data-action="open-candidate" data-id="${listing.id}">
-    <div class="candidate-photo ${roomVisualClass(listing.id)}"><span>0${index + 1}</span><b>${candidate.selectionLabel.replace("综合最合适", "首选").replace("预算最轻", "省预算").replace("居住条件最好", "住得好")}</b></div>
-    <div class="candidate-copy"><div><h2>${listing.shortTitle}</h2><strong>¥${candidate.agreedRent.toLocaleString("zh-CN")}<small>/月</small></strong></div><p>${listing.station} · 步行 ${listing.walkMinutes} 分钟 · 通勤 ${listing.commuteMinutes} 分钟</p><div class="candidate-tags"><span>${listing.room.areaSqm}㎡</span><span>${listing.room.roommateCount} 位室友</span><span>${candidate.caveats[0] || "条件无冲突"}</span></div></div>
+  const selectionLabel = String(candidate.selectionLabel || "")
+    .replace("综合最合适", "首选")
+    .replace("预算最轻", "省预算")
+    .replace("居住条件最好", "住得好");
+  return `<article class="candidate-card"><button data-action="open-candidate" data-id="${escapeAttribute(listing.id)}">
+    <div class="candidate-photo ${roomVisualClass(listing.id)}"><span>0${index + 1}</span><b>${escapeText(selectionLabel)}</b></div>
+    <div class="candidate-copy"><div><h2>${escapeText(listing.shortTitle)}</h2><strong>¥${formatInteger(candidate.agreedRent)}<small>/月</small></strong></div><p>${escapeText(listing.station)} · 步行 ${escapeText(listing.walkMinutes)} 分钟 · 通勤 ${escapeText(listing.commuteMinutes)} 分钟</p><div class="candidate-tags"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.roommateCount)} 位室友</span><span>${escapeText(candidate.caveats[0] || "条件无冲突")}</span></div></div>
   </button></article>`;
 }
 
 function tenantCard(candidate, index) {
   const alias = candidate.displayAlias || candidate.tenant.alias;
-  return `<article class="tenant-card"><button data-action="contact-tenant"><span class="tenant-avatar">${alias.slice(0, 1)}</span><div class="tenant-main"><div><h2>${escapeHtml(alias)}</h2><b>${candidate.selectionLabel}</b></div><p>${candidate.tenant.occupation} · ${candidate.tenant.mandate.leaseMonths} 个月 · ${candidate.tenant.mandate.moveInWindow.from.slice(5)} 起</p><strong>¥${candidate.agreedRent.toLocaleString("zh-CN")} / 月</strong></div>${icon("arrow")}</button></article>`;
+  return `<article class="tenant-card"><button data-action="contact-tenant"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><div class="tenant-main"><div><h2>${escapeText(alias)}</h2><b>${escapeText(candidate.selectionLabel)}</b></div><p>${escapeText(candidate.tenant.occupation)} · ${escapeText(candidate.tenant.mandate.leaseMonths)} 个月 · ${escapeText(candidate.tenant.mandate.moveInWindow.from.slice(5))} 起</p><strong>¥${formatInteger(candidate.agreedRent)} / 月</strong></div>${icon("arrow")}</button></article>`;
 }
 
 function resultsScreen() {
@@ -850,7 +853,7 @@ function messagesScreen() {
     <article class="expiry-message ${noticeState.renewalDue ? "is-due" : "is-renewed"}">
       <div class="message-icon">${icon("clock")}</div>
       <div><span>${noticeState.renewalDue ? `任务将于 ${formatShortDate(notice.lifecycle.expiresAt)} 到期` : `已续至 ${formatShortDate(notice.lifecycle.expiresAt)}`}</span><h2>${escapeHtml(notice.label)}</h2><p>${noticeState.daysRemaining} 天后停止接收新匹配</p></div>
-      ${noticeState.renewalDue ? `<button data-action="renew-task" data-id="${notice.id}">续 30 天</button>` : `<b class="renewed-mark">已续期</b>`}
+      ${noticeState.renewalDue ? `<button data-action="renew-task" data-id="${escapeAttribute(notice.id)}">续 30 天</button>` : `<b class="renewed-mark">已续期</b>`}
     </article>
     <div class="message-list">
       <article><span class="message-avatar bear"><img src="./assets/bear-agent-anchor.png" alt="" width="48" height="48" /></span><div><b>小熊分身</b><p>静安寺附近新增 1 套合适房源</p></div><time>10:24</time></article>
@@ -904,7 +907,7 @@ function activeCandidate() {
 function listingShareText(candidate) {
   const listing = candidate.listing;
   return [
-    `${listing.shortTitle}｜¥${candidate.agreedRent.toLocaleString("zh-CN")}/月`,
+    `${listing.shortTitle}｜¥${formatInteger(candidate.agreedRent)}/月`,
     `${listing.station}，步行 ${listing.walkMinutes} 分钟，通勤约 ${listing.commuteMinutes} 分钟`,
     `${listing.room.areaSqm}㎡，${listing.room.floor}/${listing.room.totalFloors} 层，${listing.room.roommateCount} 位室友`,
     `入住：${listing.availableFrom}`,
@@ -950,20 +953,20 @@ function candidateDetail() {
   if (!candidate) return resultsScreen();
   const listing = candidate.listing;
   return `<section class="detail-screen">
-    <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${candidate.selectionLabel}</b><button data-action="open-share" aria-label="分享房源">${icon("share")}</button></div>
+    <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><button data-action="open-share" aria-label="分享房源">${icon("share")}</button></div>
     <div class="detail-photo ${roomVisualClass(listing.id)}"></div>
     <div class="detail-sheet">
-      <div class="detail-title"><div><h1>${listing.shortTitle}</h1><p>${listing.station} · 步行 ${listing.walkMinutes} 分钟</p></div><b>¥${candidate.agreedRent.toLocaleString("zh-CN")}<small>/月</small></b></div>
-      <div class="detail-facts"><span>${listing.room.areaSqm}㎡</span><span>${listing.room.floor}/${listing.room.totalFloors} 层</span><span>${listing.room.roommateCount} 位室友</span></div>
+      <div class="detail-title"><div><h1>${escapeText(listing.shortTitle)}</h1><p>${escapeText(listing.station)} · 步行 ${escapeText(listing.walkMinutes)} 分钟</p></div><b>¥${formatInteger(candidate.agreedRent)}<small>/月</small></b></div>
+      <div class="detail-facts"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.floor)}/${escapeText(listing.room.totalFloors)} 层</span><span>${escapeText(listing.room.roommateCount)} 位室友</span></div>
       <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button><button data-action="copy-contact">${icon("contact")}<span>${state.contactUnlocked ? "复制微信号" : "交换联系"}</span></button></div>
       ${state.contactUnlocked ? `<section class="contact-card"><span>微信号</span><b>zhunaer_demo</b><button data-action="copy-contact">复制</button></section>` : ""}
-      <section class="fit-card"><header><h2>为什么合适</h2><b>${candidate.score}%</b></header>${candidate.reasons.map((item) => `<p>${item}</p>`).join("")}</section>
-      <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${item}</p>`).join("") || "<p>仍需本人现场确认</p>"}</section>
-      <section class="source-card"><h2>资料来源</h2>${candidate.provenance.map((item) => `<div><span>${item.label}</span><b>${item.value}</b><em>${item.source}</em></div>`).join("")}</section>
+      <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
+      <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需本人现场确认</p>"}</section>
+      <section class="source-card"><h2>资料来源</h2>${candidate.provenance.map((item) => `<div><span>${escapeText(item.label)}</span><b>${escapeText(item.value)}</b><em>${escapeText(item.source)}</em></div>`).join("")}</section>
       <section class="agent-dialogue-card"><h2>两个分身怎么谈</h2>${candidate.negotiation.publicEvents.map((event) => {
         const actor = event.actor === "找房 AI" ? "找房分身" : event.actor === "出租 AI" ? "房源分身" : "双方分身";
         const side = event.actor === "出租 AI" ? "is-supply" : event.actor === "双方 AI" ? "is-both" : "is-renter";
-        return `<div class="agent-dialogue-row ${side}"><span>${actor}</span><div><b>${event.title}</b><p>${event.detail}</p></div></div>`;
+        return `<div class="agent-dialogue-row ${side}"><span>${actor}</span><div><b>${escapeText(event.title)}</b><p>${escapeText(event.detail)}</p></div></div>`;
       }).join("")}</section>
       <button class="primary-button" data-action="confirm-candidate">${state.contactUnlocked ? "已完成双方确认" : "双方确认并交换联系方式"}</button><button class="report-link" data-action="open-report">举报房源</button>
     </div>
@@ -986,12 +989,12 @@ function locationSuggestionMarkup(searchText) {
   return marketplaceAreas
     .filter((item) => `${item.location}${item.station}${item.district}`.toLowerCase().includes(query))
     .slice(0, 5)
-    .map((item) => `<button data-action="toggle-location" data-value="${item.location}"><span><b>${item.location}</b><em>${item.station} · ${item.district}</em></span>${icon("plus")}</button>`)
+    .map((item) => `<button data-action="toggle-location" data-value="${escapeAttribute(item.location)}"><span><b>${escapeText(item.location)}</b><em>${escapeText(item.station)} · ${escapeText(item.district)}</em></span>${icon("plus")}</button>`)
     .join("");
 }
 
 function locationSheet() {
-  return `<div class="map-modal"><section class="map-sheet"><header><button data-action="close-sheet" aria-label="返回">${icon("back")}</button><h2>选择想住的区域</h2><button data-action="confirm-location">完成</button></header><div class="map-search"><label>${icon("search")}<input name="location-query" autocomplete="off" aria-label="搜索小区、地铁站或商圈" data-input="location-search" value="${escapeHtml(state.locationSearch)}" placeholder="搜索小区、地铁站或商圈" /></label><button data-action="locate-me" aria-label="使用当前位置">${icon("location")}<span>${state.locateState === "locating" ? "定位中" : state.locateState === "done" ? "已定位" : "定位"}</span></button></div><div class="location-suggestions">${locationSuggestionMarkup(state.locationSearch)}</div><div class="map-canvas"><i class="river"></i><i class="road road-a"></i><i class="road road-b"></i><i class="road road-c"></i>${mapLocations.map(([name, x, y]) => `<button class="map-pin" style="--x:${x}%;--y:${y}%" data-action="toggle-location" data-value="${name}" aria-pressed="${state.selectedLocations.includes(name)}"><span></span>${name}</button>`).join("")}<div class="current-pulse ${state.locateState === "done" ? "show" : ""}"></div></div><div class="map-controls"><div class="selected-areas">${state.selectedLocations.map((name) => `<button data-action="toggle-location" data-value="${name}">${name} ${icon("close")}</button>`).join("") || "<b>点地图或搜索添加区域</b>"}</div><div class="radius-control"><span>区域半径</span>${["1", "2", "3"].map((value) => `<button data-action="set-radius" data-value="${value}" aria-pressed="${state.locationRadius === value}">${value} km</button>`).join("")}</div><button class="primary-button" data-action="confirm-location">使用这些区域</button></div></section></div>`;
+  return `<div class="map-modal"><section class="map-sheet"><header><button data-action="close-sheet" aria-label="返回">${icon("back")}</button><h2>选择想住的区域</h2><button data-action="confirm-location">完成</button></header><div class="map-search"><label>${icon("search")}<input name="location-query" autocomplete="off" aria-label="搜索小区、地铁站或商圈" data-input="location-search" value="${escapeAttribute(state.locationSearch)}" placeholder="搜索小区、地铁站或商圈" /></label><button data-action="locate-me" aria-label="使用当前位置">${icon("location")}<span>${state.locateState === "locating" ? "定位中" : state.locateState === "done" ? "已定位" : "定位"}</span></button></div><div class="location-suggestions">${locationSuggestionMarkup(state.locationSearch)}</div><div class="map-canvas"><i class="river"></i><i class="road road-a"></i><i class="road road-b"></i><i class="road road-c"></i>${mapLocations.map(([name, x, y]) => `<button class="map-pin" style="--x:${x}%;--y:${y}%" data-action="toggle-location" data-value="${escapeAttribute(name)}" aria-pressed="${state.selectedLocations.includes(name)}"><span></span>${escapeText(name)}</button>`).join("")}<div class="current-pulse ${state.locateState === "done" ? "show" : ""}"></div></div><div class="map-controls"><div class="selected-areas">${state.selectedLocations.map((name) => `<button data-action="toggle-location" data-value="${escapeAttribute(name)}">${escapeText(name)} ${icon("close")}</button>`).join("") || "<b>点地图或搜索添加区域</b>"}</div><div class="radius-control"><span>区域半径</span>${["1", "2", "3"].map((value) => `<button data-action="set-radius" data-value="${value}" aria-pressed="${state.locationRadius === value}">${value} km</button>`).join("")}</div><button class="primary-button" data-action="confirm-location">使用这些区域</button></div></section></div>`;
 }
 
 function photoSheet() {
@@ -1001,7 +1004,7 @@ function photoSheet() {
 function shareSheet() {
   const candidate = activeCandidate();
   if (!candidate) return "";
-  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo ${roomVisualClass(candidate.listing.id)}"></div><div><b>${candidate.listing.shortTitle}</b><span>¥${candidate.agreedRent.toLocaleString("zh-CN")}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button><button class="source-option" data-action="copy-contact">${icon("contact")}<span>复制联系方式</span>${icon("arrow")}</button></section></div>`;
+  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo ${roomVisualClass(candidate.listing.id)}"></div><div><b>${escapeText(candidate.listing.shortTitle)}</b><span>¥${formatInteger(candidate.agreedRent)}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button><button class="source-option" data-action="copy-contact">${icon("contact")}<span>复制联系方式</span>${icon("arrow")}</button></section></div>`;
 }
 
 function labSheet() {
@@ -1015,7 +1018,7 @@ function reportSheet() {
 
 function reportResultSheet() {
   const confirmed = state.reportResult?.status === "identity_banned";
-  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>处理结果</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="report-result"><span>${icon("shield")}</span><h3>${confirmed ? "账号及关联房源已冻结" : "房源已退出新匹配"}</h3><p>${state.reportResult?.finalAction}</p></div><button class="secondary-button" data-action="close-sheet">完成</button></section></div>`;
+  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>处理结果</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="report-result"><span>${icon("shield")}</span><h3>${confirmed ? "账号及关联房源已冻结" : "房源已退出新匹配"}</h3><p>${escapeText(state.reportResult?.finalAction)}</p></div><button class="secondary-button" data-action="close-sheet">完成</button></section></div>`;
 }
 
 function activeSheet() {

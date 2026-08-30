@@ -21,6 +21,26 @@ const MIME_EXTENSIONS = new Map([
   ["image/webp", ".webp"],
   ["application/pdf", ".pdf"]
 ]);
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'"
+].join("; ");
+
+function securityHeaders() {
+  return {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(self), geolocation=(), microphone=()"
+  };
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -35,16 +55,20 @@ function isoDateAfter(days) {
 function json(response, status, payload) {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
+    ...securityHeaders(),
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
-    "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff"
+    "Cache-Control": "no-store"
   });
   response.end(body);
 }
 
 function text(response, status, body) {
-  response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+  response.writeHead(status, {
+    ...securityHeaders(),
+    "Content-Type": "text/plain; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
   response.end(body);
 }
 
@@ -283,10 +307,10 @@ export function createRentalServer(options = {}) {
       const stat = await fsPromises.stat(filename).catch(() => null);
       if (!stat?.isFile()) return text(response, 404, "Not Found");
       const headers = {
+        ...securityHeaders(),
         "Content-Type": contentTypes.get(path.extname(filename).toLowerCase()) || "application/octet-stream",
         "Content-Length": stat.size,
-        "Cache-Control": filename.endsWith("service-worker.js") ? "no-cache" : "no-store",
-        "X-Content-Type-Options": "nosniff"
+        "Cache-Control": filename.endsWith("service-worker.js") ? "no-cache" : "no-store"
       };
       response.writeHead(200, headers);
       if (request.method === "HEAD") return response.end();
