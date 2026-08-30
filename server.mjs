@@ -7,6 +7,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { validateSupplyDraft } from "./src/simulation-engine.mjs";
+import { parseSupplyText } from "./src/supply-parser.mjs";
 import { openRentalDatabase } from "./src/server/database.mjs";
 import { createIntakeService } from "./src/server/intake-service.mjs";
 import { createMatchingService } from "./src/server/matching-service.mjs";
@@ -301,13 +302,28 @@ export function createRentalServer(options = {}) {
     if (body.kind === "renter") {
       const mandate = validateRenterPayload(body.payload);
       mandate.id = id;
-      payload = { mandate, rawText: String(body.payload?.rawText || "") };
+      payload = {
+        mandate,
+        rawText: body.payload.rawText,
+        inputVersion: body.payload.inputVersion,
+        fieldStates: body.payload.fieldStates
+      };
       label = mandate.locations.slice(0, 2).join(" / ");
     } else {
+      const rawSupply = parseSupplyText(body.payload.rawText, new Date().toISOString().slice(0, 10));
+      const criticalRisk = rawSupply.riskSignals.filter((signal) => ["broker_role", "role_conflict", "prohibited_fee"].includes(signal));
+      if (criticalRisk.length) {
+        throw httpError(422, "SUPPLY_RISK_REJECTED", "只接受房东本人或当前租客的零收费房源", { reasonCodes: criticalRisk });
+      }
       const draft = verifiedDraft(body.payload, session);
       const validation = validateSupplyDraft(draft);
       if (!validation.valid) throw Object.assign(new Error(validation.errors[0]), { status: 422, details: validation.errors });
-      payload = { draft, rawText: String(body.payload?.rawText || "") };
+      payload = {
+        draft,
+        rawText: body.payload.rawText,
+        inputVersion: body.payload.inputVersion,
+        fieldStates: body.payload.fieldStates
+      };
       label = draft.title || `${draft.location}个人房源`;
     }
     repository.createTask({ id, ownerId: session.id, kind: body.kind, label, payload, expiresAt: isoDateAfter(30) });

@@ -29,6 +29,54 @@ function parseRoommateCount(text) {
   return values[match[1]] ?? Number(match[1]);
 }
 
+/** Creates a blank supply draft; unknown facts stay null until confirmed. */
+export function createEmptySupplyDraft({ city = "上海" } = {}) {
+  return {
+    role: null,
+    city,
+    district: "",
+    location: "",
+    station: "",
+    address: "",
+    title: "",
+    listedRent: 0,
+    minimumAuthorizedRent: 0,
+    availableFrom: "",
+    leaseEnd: null,
+    leaseMonthsMin: null,
+    areaSqm: null,
+    floor: null,
+    totalFloors: null,
+    viewingAvailability: "any",
+    roommateGender: null,
+    roommateCount: null,
+    fees: {
+      rent: 0,
+      deposit: 0,
+      utilities: null,
+      network: null,
+      property: null,
+      service: 0,
+      intermediary: 0
+    },
+    facilities: {
+      kitchen: null,
+      washer: null,
+      washerType: "unknown",
+      elevator: null,
+      ensuite: null,
+      exposure: "unknown",
+      network: "unknown"
+    },
+    evidence: {
+      identity: false,
+      roleDocument: false,
+      rightsDocument: false,
+      livePhotoChallenge: false
+    }
+  };
+}
+
 export function parseSupplyText(rawText, referenceDate = MARKET_REFERENCE_DATE) {
   const text = String(rawText || "").replace(/\s+/g, " ").trim();
   const claimedRole = /房东本人|房东直租|产权人|自己的房子|把房子租出去/.test(text)

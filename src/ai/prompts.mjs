@@ -44,7 +44,7 @@ export function renterIntakePrompt(renters) {
       principles: intakePrinciples,
       fewShot,
       outputContract: `返回 {"renters":[...]}。每项必须包含：
-{"renter_id":string,"city":string|null,"locations":string[],"publisher_role":"landlord"|"subletter"|"either"|null,"budget":{"target":number|null,"max":number|null},"move_in":{"from":"YYYY-MM-DD"|null,"to":"YYYY-MM-DD"|null},"max_commute_minutes":number|null,"housing":{"shared":boolean|null,"roommate_gender":"female"|"male"|null},"hard":{"elevator":boolean|null,"ensuite":boolean|null,"kitchen":boolean|null,"washer":boolean|null,"residential_utilities":boolean|null,"pet_allowed":boolean|null},"preferences":string[],"negotiable":string[],"missing_fields":string[],"clarifying_questions":string[],"evidence":object}`
+{"renter_id":string,"city":string|null,"locations":string[],"commute_destinations":string[],"publisher_role":"landlord"|"subletter"|"either"|null,"budget":{"target":number|null,"max":number|null},"move_in":{"from":"YYYY-MM-DD"|null,"to":"YYYY-MM-DD"|null},"max_commute_minutes":number|null,"housing":{"shared":boolean|null,"roommate_gender":"female"|"male"|null},"hard":{"elevator":boolean|null,"ensuite":boolean|null,"kitchen":boolean|null,"washer":boolean|null,"residential_utilities":boolean|null,"pet_allowed":boolean|null},"preferences":string[],"negotiable":string[],"missing_fields":string[],"clarifying_questions":string[],"evidence":object}`
     }),
     user: `参考日期：2026-08-24，时区：Asia/Shanghai。\n请结构化以下 10 位租客：\n${stringify(renters)}`
   };

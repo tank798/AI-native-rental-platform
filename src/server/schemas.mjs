@@ -100,6 +100,15 @@ export function parseTaskCreateRequest(body) {
   const payload = structuredClone(body.payload);
   validateTaskValue(payload, "payload");
   payload.rawText = boundedText(payload.rawText ?? "", { field: "payload.rawText", maxLength: 4_000 }) || "";
+  const inputVersion = Number(payload.inputVersion ?? 1);
+  if (!Number.isInteger(inputVersion) || inputVersion < 1 || inputVersion > 1_000_000) {
+    invalidField("payload.inputVersion", "payload.inputVersion 必须是正整数");
+  }
+  if (payload.fieldStates !== undefined && (!payload.fieldStates || typeof payload.fieldStates !== "object" || Array.isArray(payload.fieldStates))) {
+    invalidField("payload.fieldStates", "payload.fieldStates 必须是对象");
+  }
+  payload.inputVersion = inputVersion;
+  payload.fieldStates = payload.fieldStates || {};
   return { kind: body.kind, payload };
 }
 
@@ -114,6 +123,7 @@ export function parseRenterModelPayload(payload) {
   return {
     city: modelText(source.city, "renters.0.city", 80),
     locations: modelStringArray(source.locations, "renters.0.locations", { maxItems: 10, maxLength: 120 }),
+    commute_destinations: modelStringArray(source.commute_destinations, "renters.0.commute_destinations", { maxItems: 5, maxLength: 120 }),
     publisher_role: modelText(source.publisher_role, "renters.0.publisher_role", 24),
     budget: {
       target: modelNumber(budget.target, "renters.0.budget.target"),

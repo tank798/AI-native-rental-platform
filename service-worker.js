@@ -1,4 +1,4 @@
-const CACHE_NAME = "zhunaer-app-shell-v4";
+const CACHE_NAME = "zhunaer-app-shell-v5";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -8,6 +8,8 @@ const APP_SHELL = [
   "./src/bear-agent.mjs",
   "./src/task-lifecycle.mjs",
   "./src/demand-parser.mjs",
+  "./src/field-state.mjs",
+  "./src/mandate-builder.mjs",
   "./src/supply-parser.mjs",
   "./src/marketplace-corpus.mjs",
   "./src/fixtures.mjs",

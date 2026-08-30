@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { parseDemandText } from "../src/demand-parser.mjs";
-import { parseSupplyText } from "../src/supply-parser.mjs";
+import { createEmptySupplyDraft, parseSupplyText } from "../src/supply-parser.mjs";
 import { createIntakeService } from "../src/server/intake-service.mjs";
+import { baseMandate } from "../src/fixtures.mjs";
+import { listingFromSupplyDraft } from "../src/simulation-engine.mjs";
 
 const referenceDate = "2026-08-28";
 
@@ -65,6 +67,34 @@ test("出租对话可抽取角色、房屋事实和零收费条件", () => {
   assert.deepEqual(parsed.riskSignals, []);
 });
 
+test("新房源草稿不继承 demo 面积、楼层或 12 个月租期", () => {
+  const draft = createEmptySupplyDraft();
+
+  assert.equal(draft.areaSqm, null);
+  assert.equal(draft.floor, null);
+  assert.equal(draft.totalFloors, null);
+  assert.equal(draft.leaseMonthsMin, null);
+  assert.equal(draft.facilities.kitchen, null);
+  assert.equal(draft.facilities.washer, null);
+  const listing = listingFromSupplyDraft({
+    ...draft,
+    role: "landlord",
+    location: "静安寺",
+    address: "某小区 1 号",
+    title: "待确认房源",
+    listedRent: 3_200,
+    minimumAuthorizedRent: 3_200,
+    availableFrom: "2026-09-03",
+    leaseMonthsMin: 6,
+    areaSqm: 15,
+    floor: 9,
+    totalFloors: 18
+  }, baseMandate, 0);
+  assert.equal(listing.facilities.kitchen, null);
+  assert.equal(listing.facilities.washer, null);
+  assert.equal(listing.fees.networkMonthly, null);
+});
+
 test("自然语言零收费承诺不会把个人转租误判为中介", () => {
   const parsed = parseSupplyText(
     "我是当前租客，个人转租静安寺次卧，月租3500元，9月3日起租，1位女生室友，不收任何中介费服务费",
@@ -111,6 +141,15 @@ test("运行时结构化在没有模型 Key 时仍走可审计的安全模式", 
   assert.equal(supply.provider, "deterministic");
   assert.equal(supply.parsed.fields.role, "landlord");
   assert.equal(supply.parsed.fields.listedRent, 3200);
+});
+
+test("每轮最多保留三个绑定 fieldKey 的高价值问题", async () => {
+  const intake = createIntakeService();
+  const renter = await intake.parseRenter("预算 3000 左右", referenceDate);
+
+  assert.equal(renter.parsed.questions.length, 3);
+  assert.equal(new Set(renter.parsed.questions.map((question) => question.fieldKey)).size, 3);
+  assert.ok(renter.parsed.questions.every((question) => question.reasonCode && question.question));
 });
 
 test("模型补充字段不能覆盖规则解析出的明确事实", async () => {

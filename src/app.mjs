@@ -1,6 +1,8 @@
-import { baseMandate, demoSupplyDraft, labScenarios } from "./fixtures.mjs";
+import { baseMandate, labScenarios } from "./fixtures.mjs";
 import { parseDemandText, parsedDemandTags } from "./demand-parser.mjs";
-import { parseSupplyText } from "./supply-parser.mjs";
+import { buildMandateFromConfirmedAnswers, seedAnswersFromParsed } from "./mandate-builder.mjs";
+import { applyFieldProposal, confirmField } from "./field-state.mjs";
+import { createEmptySupplyDraft, parseSupplyText } from "./supply-parser.mjs";
 import {
   evaluateReport,
   matchMandate,
@@ -100,7 +102,9 @@ function formatShortDate(isoDate) {
 
 function defaultAnswers() {
   return {
+    city: "上海",
     location: "",
+    commuteDestinations: [],
     budgetMin: "",
     budgetMax: "",
     moveInFrom: "",
@@ -121,55 +125,8 @@ function defaultAnswers() {
   };
 }
 
-const startingSupplyDraft = {
-  ...structuredClone(demoSupplyDraft),
-  availableFrom: todayInShanghai(),
-  areaSqm: 15,
-  floor: 9,
-  totalFloors: 18,
-  leaseMonthsMin: 12,
-  viewingAvailability: "any"
-};
-
 function freshSupplyDraft() {
-  return {
-    ...structuredClone(startingSupplyDraft),
-    role: null,
-    district: "",
-    location: "",
-    station: "",
-    address: "",
-    title: "",
-    listedRent: 0,
-    minimumAuthorizedRent: 0,
-    availableFrom: "",
-    roommateGender: null,
-    roommateCount: 0,
-    fees: {
-      rent: 0,
-      deposit: 0,
-      utilities: "民水民电按账单均摊",
-      network: 0,
-      property: 0,
-      service: 0,
-      intermediary: 0
-    },
-    facilities: {
-      kitchen: false,
-      washer: false,
-      washerType: "unknown",
-      elevator: false,
-      ensuite: false,
-      exposure: "unknown",
-      network: "included"
-    },
-    evidence: {
-      identity: false,
-      roleDocument: false,
-      rightsDocument: false,
-      livePhotoChallenge: false
-    }
-  };
+  return createEmptySupplyDraft();
 }
 
 const demoRenewalTask = {
@@ -215,12 +172,16 @@ function initialProductState() {
     parsedSupply: null,
     listening: false,
     answers: defaultAnswers(),
+    renterFieldStates: {},
+    renterInputVersion: 0,
     selectedLocations: [],
     locationSearch: "",
     locationRadius: "2",
     locateState: "idle",
     consent: false,
     supplyDraft: freshSupplyDraft(),
+    supplyFieldStates: {},
+    supplyInputVersion: 0,
     supplyPledge: false,
     supplyValidation: null,
     supplyEvidenceRefs: {},
@@ -390,68 +351,31 @@ function syncExpiredTask() {
   state.activeCandidateId = null;
 }
 
-function seedAnswersFromParsed(parsed) {
-  const fields = parsed?.fields;
-  if (!fields) return;
-  if (fields.locations.length) {
-    state.selectedLocations = [...fields.locations];
-    state.answers.location = fields.locations.join(" / ");
-  }
-  if (fields.budget?.target) state.answers.budgetMin = String(fields.budget.target);
-  if (fields.budget?.hardMax) state.answers.budgetMax = String(fields.budget.hardMax);
-  if (fields.moveInWindow?.from) state.answers.moveInFrom = fields.moveInWindow.from;
-  if (fields.moveInWindow?.to) state.answers.moveInTo = fields.moveInWindow.to;
-  if (fields.maxCommuteMinutes) state.answers.commute = String(fields.maxCommuteMinutes);
-  if (fields.leaseMonths) state.answers.leaseMonths = String(fields.leaseMonths);
-  if (fields.sharedHousing === false) state.answers.roommate = "no_share";
-  if (fields.sharedHousing === true) state.answers.roommate = fields.roommateGender || "any";
-  if (fields.preferences.ensuite) state.answers.bathroom = fields.preferences.ensuite;
-  if (fields.preferences.elevator) state.answers.elevator = fields.preferences.elevator;
-  if (fields.preferences.utilities) state.answers.utilities = fields.preferences.utilities;
-  if (fields.preferences.floor) state.answers.floor = fields.preferences.floor;
-  if (fields.preferences.exposure) state.answers.exposure = fields.preferences.exposure;
-  if (fields.preferences.network) state.answers.network = fields.preferences.network;
-  if (fields.preferences.washerType) state.answers.washerType = fields.preferences.washerType;
-  if (fields.viewingAvailability) state.answers.viewing = fields.viewingAvailability;
-  if (fields.facilities.kitchen !== null) state.answers.kitchen = fields.facilities.kitchen ? "required" : "any";
-  if (fields.facilities.washer !== null) state.answers.washer = fields.facilities.washer ? "required" : "any";
+function mandateFromAnswers() {
+  return buildMandateFromConfirmedAnswers({
+    answers: state.answers,
+    selectedLocations: state.selectedLocations,
+    city: state.answers.city,
+    baseMandate
+  });
 }
 
-function mandateFromAnswers() {
-  const mandate = structuredClone(baseMandate);
-  const parsed = state.parsedDemand?.fields;
-  const targetBudget = parsed?.budget?.target || Number(state.answers.budgetMin);
-  const hardMax = parsed?.budget?.hardMax || Number(state.answers.budgetMax);
-  mandate.city = parsed?.city || "上海";
-  mandate.locations = state.selectedLocations.length
-    ? [...state.selectedLocations]
-    : parsed?.locations?.length
-      ? [...parsed.locations]
-      : state.answers.location.split(/(?:、|\/|，|,)/).map((item) => item.trim()).filter(Boolean);
-  mandate.maxCommuteMinutes = parsed?.maxCommuteMinutes || Number(state.answers.commute);
-  mandate.leaseMonths = parsed?.leaseMonths || (state.answers.leaseMonths === "any" ? 12 : Number(state.answers.leaseMonths || 12));
-  mandate.leaseFlexible = state.answers.leaseMonths === "any";
-  mandate.budget.target = targetBudget;
-  mandate.budget.hardMax = hardMax;
-  mandate.moveInWindow = structuredClone(parsed?.moveInWindow || {
-    from: state.answers.moveInFrom,
-    to: state.answers.moveInTo
-  });
-  mandate.roommateGender = parsed?.roommateGender || (["female", "male"].includes(state.answers.roommate) ? state.answers.roommate : null);
-  mandate.sharedHousing = parsed?.sharedHousing ?? state.answers.roommate !== "no_share";
-  mandate.hardConstraints.ensuite = state.answers.bathroom === "required";
-  mandate.hardConstraints.elevator = state.answers.elevator === "required";
-  mandate.hardConstraints.kitchen = parsed?.facilities?.kitchen ?? state.answers.kitchen === "required";
-  mandate.hardConstraints.washer = parsed?.facilities?.washer ?? state.answers.washer === "required";
-  mandate.preferences.ensuite = state.answers.bathroom;
-  mandate.preferences.elevator = state.answers.elevator;
-  mandate.preferences.utilities = state.answers.utilities;
-  mandate.preferences.floor = state.answers.floor;
-  mandate.preferences.exposure = state.answers.exposure === "any" ? "any" : `${state.answers.exposure}_preferred`;
-  mandate.preferences.washerType = state.answers.washerType === "any" ? "any" : `${state.answers.washerType}_preferred`;
-  mandate.preferences.network = state.answers.network;
-  mandate.viewingAvailability = state.answers.viewing;
-  return mandate;
+function proposedFieldStates(values) {
+  return Object.fromEntries(Object.entries(values).map(([fieldKey, value]) => [
+    fieldKey,
+    applyFieldProposal(null, { value, source: "intake", confidence: null })
+  ]));
+}
+
+function confirmRenterAnswer(fieldKey, value) {
+  state.answers[fieldKey] = value;
+  state.renterFieldStates[fieldKey] = confirmField(state.renterFieldStates[fieldKey], value);
+  state.renterInputVersion += 1;
+}
+
+function confirmSupplyField(fieldKey, value) {
+  state.supplyFieldStates[fieldKey] = confirmField(state.supplyFieldStates[fieldKey], value);
+  state.supplyInputVersion += 1;
 }
 
 function validateDemandAnswers() {
@@ -462,7 +386,7 @@ function validateDemandAnswers() {
   if (!mandate.moveInWindow?.from || !mandate.moveInWindow?.to) return "请填写入住日期范围";
   if (mandate.moveInWindow.to < mandate.moveInWindow.from) return "最晚入住日期不能早于最早日期";
   if (mandate.maxCommuteMinutes < 15 || mandate.maxCommuteMinutes > 60) return "通勤时间需在 15 到 60 分钟之间";
-  if (![3, 6, 12].includes(Number(mandate.leaseMonths))) return "请选择租期";
+  if (!mandate.leaseFlexible && ![3, 6, 12].includes(Number(mandate.leaseMonths))) return "请选择租期";
   return null;
 }
 
@@ -566,14 +490,19 @@ function renterClarify() {
   const tags = parsedDemandTags(parsed);
   const today = todayInShanghai();
   const missing = new Set(parsed.coreMissing);
-  const aiQuestion = Array.isArray(parsed.aiQuestions) ? parsed.aiQuestions.find((question) => String(question || "").trim()) : null;
+  const questions = Array.isArray(parsed.questions)
+    ? parsed.questions.filter((question) => question?.fieldKey && question?.question).slice(0, 3)
+    : [];
+  const questionMarkup = questions.length
+    ? `<div class="clarification-prompts">${questions.map((question) => `<p data-field-key="${escapeAttribute(question.fieldKey)}">${escapeText(question.question)}</p>`).join("")}</div>`
+    : "<b>再确认一下</b>";
   const field = (key, label, body) => `<div class="dialogue-field ${missing.has(key) ? "is-missing" : ""}"><b>${label}</b><div>${body}</div></div>`;
   return `<section class="flow-screen">
     ${flowHeader("和找房分身确认")}
     <div class="rental-chat">
       <div class="chat-line is-user"><div class="chat-bubble">${escapeHtml(state.draftText || state.selectedLocations.join("、"))}</div></div>
       <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "<span>等你补充</span>"}</div><small class="intake-source">${state.intakeProvider === "siliconflow" ? "AI 结构化 · 规则复核" : "确定性解析 · 安全模式"}</small></div></div>
-      <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble dialogue-card"><b>${escapeHtml(aiQuestion || "再确认一下")}</b>
+      <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-anchor.png" width="36" height="41" alt="" /></span><div class="chat-bubble dialogue-card">${questionMarkup}
         <div class="dialogue-fields">
           ${field("location", "区域", `<button class="dialogue-location" data-action="open-location"><span>${state.selectedLocations.length ? escapeText(state.selectedLocations.join("、")) : "打开地图选择"}</span>${icon("arrow")}</button>`)}
           ${field("budget", "预算", `<div class="paired-inputs"><label><span>理想</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-min" value="${escapeHtml(state.answers.budgetMin)}" placeholder="3000" /></div></label><i>—</i><label><span>最高</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-max" value="${escapeHtml(state.answers.budgetMax)}" placeholder="4000" /></div></label></div>`)}
@@ -598,7 +527,7 @@ function renterClarify() {
 
 function renterReview() {
   const mandate = mandateFromAnswers();
-  const roommate = !mandate.sharedHousing ? "整租" : mandate.roommateGender === "female" ? "女生合租" : mandate.roommateGender === "male" ? "男生合租" : "可合租";
+  const roommate = mandate.sharedHousing === false ? "整租" : mandate.roommateGender === "female" ? "女生合租" : mandate.roommateGender === "male" ? "男生合租" : "整租合租都可";
   const budget = `¥${mandate.budget.target.toLocaleString("zh-CN")}—${mandate.budget.hardMax.toLocaleString("zh-CN")}`;
   const dates = `${mandate.moveInWindow.from?.slice(5).replace("-", ".")}—${mandate.moveInWindow.to?.slice(5).replace("-", ".")}`;
   const lease = mandate.leaseFlexible ? "灵活" : `${mandate.leaseMonths} 个月`;
@@ -665,7 +594,6 @@ function seedSupplyFromParsed(parsed) {
   if (fields.district) draft.district = fields.district;
   if (fields.location) draft.location = fields.location;
   if (fields.station) draft.station = fields.station;
-  if (fields.location) draft.address = `${fields.district || ""}${fields.location}`;
   if (fields.listedRent) {
     draft.listedRent = fields.listedRent;
     draft.fees.rent = fields.listedRent;
@@ -706,9 +634,9 @@ function supplyDraftScreen() {
           <div class="dialogue-field"><b>区域</b><select data-input="supply-location" aria-label="房源区域"><option value="">请选择</option>${locations}</select></div>
           <div class="dialogue-field"><b>房源</b><div class="stacked-inputs"><label><span>一句话</span><input data-input="supply-title" value="${escapeHtml(draft.title)}" /></label><label><span>完整地址</span><textarea data-input="supply-address">${escapeHtml(draft.address)}</textarea></label></div></div>
           <div class="dialogue-field"><b>租金</b><div class="paired-inputs"><label><span>挂牌</span><div class="money-input"><b>¥</b><input type="number" inputmode="numeric" data-input="supply-rent" value="${escapeAttribute(draft.listedRent || "")}" /></div></label><i>—</i><label><span>最低授权</span><div class="money-input"><b>¥</b><input type="number" inputmode="numeric" data-input="supply-min-rent" value="${escapeAttribute(draft.minimumAuthorizedRent || "")}" /></div></label></div></div>
-          <div class="dialogue-field"><b>入住与租期</b><div class="paired-inputs"><label><span>可入住</span><input type="date" min="${todayInShanghai()}" data-input="supply-available" value="${escapeHtml(draft.availableFrom)}" /></label><i>—</i><label><span>最短租期</span><select data-input="supply-lease"><option value="3" ${draft.leaseMonthsMin === 3 ? "selected" : ""}>3 个月</option><option value="6" ${draft.leaseMonthsMin === 6 ? "selected" : ""}>6 个月</option><option value="12" ${draft.leaseMonthsMin === 12 ? "selected" : ""}>1 年</option></select></label></div></div>
+          <div class="dialogue-field"><b>入住与租期</b><div class="paired-inputs"><label><span>可入住</span><input type="date" min="${todayInShanghai()}" data-input="supply-available" value="${escapeHtml(draft.availableFrom)}" /></label><i>—</i><label><span>最短租期</span><select data-input="supply-lease"><option value="" ${draft.leaseMonthsMin === null ? "selected" : ""} disabled>请确认</option><option value="3" ${draft.leaseMonthsMin === 3 ? "selected" : ""}>3 个月</option><option value="6" ${draft.leaseMonthsMin === 6 ? "selected" : ""}>6 个月</option><option value="12" ${draft.leaseMonthsMin === 12 ? "selected" : ""}>1 年</option></select></label></div></div>
           <div class="dialogue-field"><b>房间</b><div class="triple-inputs"><label><span>面积</span><input type="number" data-input="supply-area" value="${escapeAttribute(draft.areaSqm || "")}" /></label><label><span>楼层</span><input type="number" data-input="supply-floor" value="${escapeAttribute(draft.floor || "")}" /></label><label><span>总层</span><input type="number" data-input="supply-total-floors" value="${escapeAttribute(draft.totalFloors || "")}" /></label></div></div>
-          <div class="dialogue-field"><b>室友</b><div class="roommate-controls"><input type="number" min="0" max="8" data-input="supply-roommate-count" aria-label="室友人数" value="${escapeAttribute(draft.roommateCount)}" /><div class="choice-grid is-three">${supplyChoice("roommateGender", "female", "女生", draft.roommateGender)}${supplyChoice("roommateGender", "male", "男生", draft.roommateGender)}${supplyChoice("roommateGender", "any", "不限", draft.roommateGender || "any")}</div></div></div>
+          <div class="dialogue-field"><b>室友</b><div class="roommate-controls"><input type="number" min="0" max="8" data-input="supply-roommate-count" aria-label="室友人数" value="${escapeAttribute(draft.roommateCount ?? "")}" /><div class="choice-grid is-three">${supplyChoice("roommateGender", "female", "女生", draft.roommateGender)}${supplyChoice("roommateGender", "male", "男生", draft.roommateGender)}${supplyChoice("roommateGender", "any", "不限", draft.roommateGender || "any")}</div></div></div>
           <div class="dialogue-field"><b>朝向</b><div class="choice-grid is-four">${supplyChoice("exposure", "south", "朝南", draft.facilities.exposure)}${supplyChoice("exposure", "east", "朝东", draft.facilities.exposure)}${supplyChoice("exposure", "west", "朝西", draft.facilities.exposure)}${supplyChoice("exposure", "unknown", "不限", draft.facilities.exposure)}</div></div>
           <div class="dialogue-field"><b>设施</b><div class="supply-facility-grid">${supplyChoice("kitchen", "true", "厨房", String(draft.facilities.kitchen))}${supplyChoice("washer", "true", "洗衣机", String(draft.facilities.washer))}${supplyChoice("elevator", "true", "电梯", String(draft.facilities.elevator))}${supplyChoice("ensuite", "true", "独卫", String(draft.facilities.ensuite))}</div></div>
           <div class="dialogue-field"><b>洗衣机</b><div class="choice-grid is-three">${supplyChoice("washerType", "drum", "滚筒", draft.facilities.washerType)}${supplyChoice("washerType", "pulsator", "波轮", draft.facilities.washerType)}${supplyChoice("washerType", "unknown", "不限", draft.facilities.washerType)}</div></div>
@@ -810,7 +738,8 @@ function candidateCard(candidate, index) {
 
 function tenantCard(candidate, index) {
   const alias = candidate.displayAlias || candidate.tenant.alias;
-  return `<article class="tenant-card"><button data-action="contact-tenant"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><div class="tenant-main"><div><h2>${escapeText(alias)}</h2><b>${escapeText(candidate.selectionLabel)}</b></div><p>${escapeText(candidate.tenant.occupation)} · ${escapeText(candidate.tenant.mandate.leaseMonths)} 个月 · ${escapeText(candidate.tenant.mandate.moveInWindow.from.slice(5))} 起</p><strong>¥${formatInteger(candidate.agreedRent)} / 月</strong></div>${icon("arrow")}</button></article>`;
+  const lease = candidate.tenant.mandate.leaseFlexible ? "租期灵活" : `${candidate.tenant.mandate.leaseMonths} 个月`;
+  return `<article class="tenant-card"><button data-action="contact-tenant"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><div class="tenant-main"><div><h2>${escapeText(alias)}</h2><b>${escapeText(candidate.selectionLabel)}</b></div><p>${escapeText(candidate.tenant.occupation)} · ${escapeText(lease)} · ${escapeText(candidate.tenant.mandate.moveInWindow.from.slice(5))} 起</p><strong>¥${formatInteger(candidate.agreedRent)} / 月</strong></div>${icon("arrow")}</button></article>`;
 }
 
 function resultsScreen() {
@@ -1117,8 +1046,12 @@ async function beginIntake() {
     state.syncError = error.message;
   }
   state.intakeLoading = false;
-  state.answers = defaultAnswers();
-  seedAnswersFromParsed(state.parsedDemand);
+  state.answers = seedAnswersFromParsed(state.parsedDemand, defaultAnswers());
+  state.renterFieldStates = proposedFieldStates(state.answers);
+  state.renterInputVersion = 1;
+  if (state.parsedDemand?.fields?.locations?.length) {
+    state.selectedLocations = [...state.parsedDemand.fields.locations];
+  }
   state.consent = false;
   state.flow = "renter";
   state.renterStage = "clarify";
@@ -1144,6 +1077,8 @@ async function beginSupplyIntake() {
   }
   state.intakeLoading = false;
   seedSupplyFromParsed(state.parsedSupply);
+  state.supplyFieldStates = proposedFieldStates(state.supplyDraft);
+  state.supplyInputVersion = 1;
   state.supplyPledge = false;
   state.supplyValidation = null;
   state.flow = "supply";
@@ -1328,9 +1263,13 @@ function resetAll() {
     supplyText: "",
     parsedSupply: null,
     answers: defaultAnswers(),
+    renterFieldStates: {},
+    renterInputVersion: 0,
     selectedLocations: [],
     consent: false,
     supplyDraft: freshSupplyDraft(),
+    supplyFieldStates: {},
+    supplyInputVersion: 0,
     supplyPledge: false,
     supplyValidation: null,
     supplyEvidenceRefs: {},
@@ -1361,11 +1300,11 @@ app.addEventListener("input", (event) => {
     const suggestions = app.querySelector(".location-suggestions");
     if (suggestions) suggestions.innerHTML = locationSuggestionMarkup(input.value);
   }
-  if (key === "budget-min") state.answers.budgetMin = input.value;
-  if (key === "budget-max") state.answers.budgetMax = input.value;
-  if (key === "move-in-from") state.answers.moveInFrom = input.value;
-  if (key === "move-in-to") state.answers.moveInTo = input.value;
-  if (key === "commute-range") { state.answers.commute = input.value; const output = app.querySelector("#commute-value"); if (output) output.textContent = `${input.value} 分钟`; }
+  if (key === "budget-min") confirmRenterAnswer("budgetMin", input.value);
+  if (key === "budget-max") confirmRenterAnswer("budgetMax", input.value);
+  if (key === "move-in-from") confirmRenterAnswer("moveInFrom", input.value);
+  if (key === "move-in-to") confirmRenterAnswer("moveInTo", input.value);
+  if (key === "commute-range") { confirmRenterAnswer("commute", input.value); const output = app.querySelector("#commute-value"); if (output) output.textContent = `${input.value} 分钟`; }
   if (key === "supply-title") state.supplyDraft.title = input.value;
   if (key === "supply-address") state.supplyDraft.address = input.value;
   if (key === "supply-rent") {
@@ -1376,7 +1315,7 @@ app.addEventListener("input", (event) => {
   }
   if (key === "supply-min-rent") state.supplyDraft.minimumAuthorizedRent = Number(input.value || 0);
   if (key === "supply-available") state.supplyDraft.availableFrom = input.value;
-  if (key === "supply-lease") state.supplyDraft.leaseMonthsMin = Number(input.value || 12);
+  if (key === "supply-lease") state.supplyDraft.leaseMonthsMin = input.value ? Number(input.value) : null;
   if (key === "supply-area") state.supplyDraft.areaSqm = Number(input.value || 0);
   if (key === "supply-floor") state.supplyDraft.floor = Number(input.value || 0);
   if (key === "supply-total-floors") state.supplyDraft.totalFloors = Number(input.value || 0);
@@ -1387,6 +1326,7 @@ app.addEventListener("input", (event) => {
     state.supplyDraft.district = area?.district || "";
     state.supplyDraft.station = area?.station || "";
   }
+  if (key.startsWith("supply-") && key !== "supply-text") confirmSupplyField(key, input.value);
 });
 
 app.addEventListener("change", async (event) => {
@@ -1400,6 +1340,7 @@ app.addEventListener("change", async (event) => {
       const uploaded = await uploadEvidenceFile(file, kind);
       state.supplyEvidenceRefs[kind] = uploaded.id;
       state.supplyDraft.evidence[kind] = true;
+      confirmSupplyField(`evidence.${kind}`, uploaded.id);
       state.evidenceUploading = null;
       showToast("材料已私密上传");
     } catch (error) {
@@ -1423,6 +1364,7 @@ app.addEventListener("change", async (event) => {
     const uploaded = await uploadEvidenceFile(files[0], "livePhotoChallenge");
     state.supplyEvidenceRefs.livePhotoChallenge = uploaded.id;
     state.supplyDraft.evidence.livePhotoChallenge = true;
+    confirmSupplyField("evidence.livePhotoChallenge", uploaded.id);
     state.evidenceUploading = null;
     state.sheet = null;
     showToast("现场照片已私密上传");
@@ -1450,6 +1392,7 @@ app.addEventListener("keydown", (event) => {
   if (search && event.key === "Enter" && search.value.trim()) {
     event.preventDefault();
     if (!state.selectedLocations.includes(search.value.trim())) state.selectedLocations.push(search.value.trim());
+    confirmRenterAnswer("location", state.selectedLocations.join(" / "));
     state.locationSearch = "";
     render();
   }
@@ -1466,8 +1409,8 @@ app.addEventListener("click", async (event) => {
     case "open-create": state.sheet = "create"; render(); break;
     case "close-sheet":
     case "close-sheet-from-scrim": state.sheet = null; render(); break;
-    case "create-renter": state.sheet = null; state.flow = "renter"; state.renterStage = "input"; render(); break;
-    case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyEvidenceRefs = {}; state.photoPreviews = []; render(); break;
+    case "create-renter": state.sheet = null; state.flow = "renter"; state.renterStage = "input"; state.renterFieldStates = {}; state.renterInputVersion = 0; render(); break;
+    case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyFieldStates = {}; state.supplyInputVersion = 0; state.supplyEvidenceRefs = {}; state.photoPreviews = []; render(); break;
     case "cancel-flow": state.flow = null; state.page = "root"; render(); break;
     case "voice-input": startVoiceInput(); break;
     case "home-intake": beginIntake(); break;
@@ -1477,7 +1420,7 @@ app.addEventListener("click", async (event) => {
     case "toggle-location": {
       const index = state.selectedLocations.indexOf(value);
       if (index >= 0) state.selectedLocations.splice(index, 1); else state.selectedLocations.push(value);
-      state.answers.location = state.selectedLocations.join(" / ");
+      confirmRenterAnswer("location", state.selectedLocations.join(" / "));
       render();
       break;
     }
@@ -1488,15 +1431,20 @@ app.addEventListener("click", async (event) => {
       navigator.geolocation.getCurrentPosition(() => { state.locateState = "done"; render(); }, () => { state.locateState = "idle"; showToast("没有获得定位权限"); }, { enableHighAccuracy: true, timeout: 8000 });
       break;
     }
-    case "confirm-location": state.answers.location = state.selectedLocations.join(" / "); state.sheet = null; render(); break;
-    case "set-answer": state.answers[target.dataset.key] = value; render(); break;
+    case "confirm-location": confirmRenterAnswer("location", state.selectedLocations.join(" / ")); state.sheet = null; render(); break;
+    case "set-answer": confirmRenterAnswer(target.dataset.key, value); render(); break;
     case "review-mandate": { const error = validateDemandAnswers(); if (error) showToast(error); else { state.renterStage = "review"; render(); } break; }
     case "toggle-consent": state.consent = target.checked; app.querySelector('[data-action="publish-mandate"]')?.toggleAttribute("disabled", !state.consent); break;
     case "publish-mandate": {
       if (!state.consent) { showToast("请先确认需求"); break; }
       target.disabled = true;
       try {
-        const snapshot = await createServerTask("renter", { mandate: mandateFromAnswers(), rawText: state.draftText });
+        const snapshot = await createServerTask("renter", {
+          mandate: mandateFromAnswers(),
+          rawText: state.draftText,
+          inputVersion: state.renterInputVersion,
+          fieldStates: state.renterFieldStates
+        });
         state.result = { scanned: snapshot.task.scanned, candidates: snapshot.candidates, audit: snapshot.events || [] };
         await launchBearAgent(app.querySelector('[data-bear-id="renter-review-bear"]'));
         startMatching("renter", snapshot.task);
@@ -1506,7 +1454,7 @@ app.addEventListener("click", async (event) => {
       }
       break;
     }
-    case "set-supply-role": state.supplyDraft.role = value; render(); break;
+    case "set-supply-role": state.supplyDraft.role = value; confirmSupplyField("role", value); render(); break;
     case "trigger-evidence": app.querySelector(`#evidence-${value}`)?.click(); break;
     case "set-supply-detail": {
       const key = target.dataset.key;
@@ -1520,6 +1468,7 @@ app.addEventListener("click", async (event) => {
       } else {
         state.supplyDraft[key] = value;
       }
+      confirmSupplyField(key, value);
       render();
       break;
     }
@@ -1543,6 +1492,8 @@ app.addEventListener("click", async (event) => {
         const snapshot = await createServerTask("supply", {
           draft: state.supplyDraft,
           rawText: state.supplyText,
+          inputVersion: state.supplyInputVersion,
+          fieldStates: state.supplyFieldStates,
           evidenceRefs: state.supplyEvidenceRefs
         });
         state.supplyResult = { scanned: snapshot.task.scanned, candidates: snapshot.candidates, audit: snapshot.events || [] };

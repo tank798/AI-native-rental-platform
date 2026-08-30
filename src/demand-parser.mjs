@@ -194,8 +194,18 @@ function cleanLocationCandidate(value) {
     .trim();
 }
 
-function parseLocations(text) {
-  const known = LOCATION_CATALOG.filter((location) => text.includes(location));
+function parseCommuteDestinations(text) {
+  const destinations = LOCATION_CATALOG.filter((location) => {
+    const namedTrip = new RegExp(`(?:通勤(?:到|去)?|去|到)\\s*${location}(?:\\s*(?:上班|工作|通勤|\\d+\\s*分钟))`).test(text);
+    const workplace = new RegExp(`(?:上班|工作)(?:地点)?(?:在|到|去)\\s*${location}`).test(text);
+    return namedTrip || workplace;
+  });
+  return [...new Set(destinations)];
+}
+
+function parseLocations(text, commuteDestinations = []) {
+  const commuteOnly = new Set(commuteDestinations);
+  const known = LOCATION_CATALOG.filter((location) => text.includes(location) && !commuteOnly.has(location));
   if (known.length) return known;
 
   const candidates = [];
@@ -238,7 +248,8 @@ export function parseDemandText(rawText, referenceDate = currentDateInShanghai()
     .replace(/\s+/g, " ")
     .replace(/\s*(月|日|号|分钟|元|块|千)\s*/g, "$1")
     .trim();
-  const locations = parseLocations(text);
+  const commuteDestinations = parseCommuteDestinations(text);
+  const locations = parseLocations(text, commuteDestinations);
   const budget = parseBudget(text);
   const moveInWindow = parseMoveIn(text, referenceDate);
   const maxCommuteMinutes = parseCommute(text);
@@ -276,11 +287,22 @@ export function parseDemandText(rawText, referenceDate = currentDateInShanghai()
   if (kitchen === null) preferenceMissing.push("kitchen");
   if (washer === null) preferenceMissing.push("washer");
 
+  const questionByMissingField = {
+    location: { fieldKey: "targetLocations", question: "你想住在哪些区域？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 100 },
+    budget: { fieldKey: "budget.hardMax", question: "你能接受的月租最高上限是多少？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 95 },
+    moveIn: { fieldKey: "moveInWindow", question: "你希望在什么日期范围内入住？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 90 },
+    housing: { fieldKey: "sharedHousing", question: "你要整租，还是可以接受合租？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 85 },
+    commute: { fieldKey: "maxCommuteMinutes", question: "你能接受的最长通勤时间是多少分钟？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 80 }
+  };
+  const questions = coreMissing.map((key) => questionByMissingField[key]).filter(Boolean).slice(0, 3);
+
   return {
     rawText: text,
     fields: {
       city: /北京/.test(text) ? "北京" : /深圳/.test(text) ? "深圳" : /广州/.test(text) ? "广州" : "上海",
       locations,
+      targetLocations: [...locations],
+      commuteDestinations,
       budget,
       moveInWindow,
       maxCommuteMinutes,
@@ -292,7 +314,8 @@ export function parseDemandText(rawText, referenceDate = currentDateInShanghai()
       facilities: { kitchen, washer }
     },
     coreMissing,
-    preferenceMissing
+    preferenceMissing,
+    questions
   };
 }
 

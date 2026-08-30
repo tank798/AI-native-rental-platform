@@ -41,6 +41,8 @@ function publicTenant(candidate) {
       occupation: tenant.occupation,
       mandate: {
         leaseMonths: tenant.mandate.leaseMonths,
+        leaseFlexible: Boolean(tenant.mandate.leaseFlexible),
+        leaseMonthsRange: tenant.mandate.leaseMonthsRange || null,
         moveInWindow: tenant.mandate.moveInWindow,
         sharedHousing: tenant.mandate.sharedHousing,
         roommateGender: tenant.mandate.roommateGender,

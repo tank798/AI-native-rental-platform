@@ -36,6 +36,10 @@ function mergeRenter(ruleResult, aiResult) {
   fields.facilities = fields.facilities || {};
   if (!hasValue(fields.city) && hasValue(aiResult.city)) fields.city = aiResult.city;
   if (!fields.locations.length && Array.isArray(aiResult.locations) && aiResult.locations.length) fields.locations = aiResult.locations;
+  fields.targetLocations = [...fields.locations];
+  if (!fields.commuteDestinations?.length && aiResult.commute_destinations?.length) {
+    fields.commuteDestinations = [...aiResult.commute_destinations];
+  }
 
   const currentBudget = fields.budget || { target: null, hardMax: null, explicitRange: false, capInferred: false };
   const target = fillIfMissing(currentBudget.target, finiteNumber(aiResult.budget?.target));
@@ -84,7 +88,16 @@ function mergeRenter(ruleResult, aiResult) {
     ...ruleResult,
     fields,
     coreMissing,
-    aiQuestions: Array.isArray(aiResult.clarifying_questions) ? aiResult.clarifying_questions : []
+    questions: coreMissing
+      .map((missingKey) => ({
+        location: { fieldKey: "targetLocations", question: "你想住在哪些区域？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 100 },
+        budget: { fieldKey: "budget.hardMax", question: "你能接受的月租最高上限是多少？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 95 },
+        moveIn: { fieldKey: "moveInWindow", question: "你希望在什么日期范围内入住？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 90 },
+        housing: { fieldKey: "sharedHousing", question: "你要整租，还是可以接受合租？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 85 },
+        commute: { fieldKey: "maxCommuteMinutes", question: "你能接受的最长通勤时间是多少分钟？", reasonCode: "HARD_CONDITION_UNKNOWN", priority: 80 }
+      }[missingKey]))
+      .filter(Boolean)
+      .slice(0, 3)
   };
 }
 

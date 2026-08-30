@@ -103,16 +103,22 @@ function hardConstraintAssessment(mandate, listing) {
   }
   if (mandate.hardConstraints.kitchen && !listing.facilities?.kitchen) reasons.push("kitchen");
   if (mandate.hardConstraints.washer && !listing.facilities?.washer) reasons.push("washer");
-  if (!mandate.sharedHousing && Number(listing.room?.roommateCount || 0) > 0) reasons.push("shared_housing");
+  if (mandate.sharedHousing === false && Number(listing.room?.roommateCount || 0) > 0) reasons.push("shared_housing");
   if (mandate.hardConstraints.ensuite && !listing.facilities?.ensuite) reasons.push("ensuite");
   if (mandate.hardConstraints.elevator && !listing.facilities?.elevator) reasons.push("elevator");
-  if (Number(mandate.leaseMonths || 0) < Number(listing.leaseMonthsMin || 0)) reasons.push("lease_term");
+  const maximumLeaseMonths = mandate.leaseFlexible
+    ? Number(mandate.leaseMonthsRange?.max || 0)
+    : Number(mandate.leaseMonths || 0);
+  if (maximumLeaseMonths < Number(listing.leaseMonthsMin || 0)) reasons.push("lease_term");
 
   return reasons;
 }
 
 function conditionalOfferIsUsable(mandate, offer) {
-  const leaseOkay = !offer.conditions?.leaseMonthsMin || mandate.leaseMonths >= offer.conditions.leaseMonthsMin;
+  const acceptedLeaseMonths = mandate.leaseFlexible
+    ? Number(mandate.leaseMonthsRange?.max || 0)
+    : Number(mandate.leaseMonths || 0);
+  const leaseOkay = !offer.conditions?.leaseMonthsMin || acceptedLeaseMonths >= offer.conditions.leaseMonthsMin;
   const dateOkay =
     !offer.conditions?.moveInOnOrBefore ||
     compareDate(mandate.moveInWindow.from, offer.conditions.moveInOnOrBefore) <= 0;
@@ -125,7 +131,7 @@ export function negotiate(mandate, listing) {
       type: "match_request",
       actor: "找房 AI",
       title: "发出匹配请求",
-      detail: `确认 ${listing.availableFrom.slice(5).replace("-", "月")} 日前后可入住、${mandate.leaseMonths} 个月租期与费用清单。`
+      detail: `确认 ${listing.availableFrom.slice(5).replace("-", "月")} 日前后可入住、${mandate.leaseFlexible ? "灵活" : `${mandate.leaseMonths} 个月`}租期与费用清单。`
     },
     {
       type: "clarification",
@@ -430,6 +436,11 @@ export function listingFromSupplyDraft(draft, mandate, index) {
       .map(normalizePlace)
       .some((candidate) => candidate && (candidate.includes(wanted) || wanted.includes(candidate)));
   });
+  const facility = (key) => typeof draft.facilities?.[key] === "boolean" ? draft.facilities[key] : null;
+  const monthlyFee = (key) => {
+    const value = draft.fees?.[key];
+    return value === null || value === undefined || value === "" ? null : Number(value);
+  };
 
   return {
     id: `draft-${draft.role || "supply"}`,
@@ -458,14 +469,20 @@ export function listingFromSupplyDraft(draft, mandate, index) {
       roommateGender: draft.roommateGender || null
     },
     facilities: {
-      kitchen: Boolean(draft.facilities?.kitchen),
-      washer: Boolean(draft.facilities?.washer),
+      kitchen: facility("kitchen"),
+      washer: facility("washer"),
       washerType: draft.facilities?.washerType || "unknown",
-      elevator: Boolean(draft.facilities?.elevator),
-      ensuite: Boolean(draft.facilities?.ensuite),
+      elevator: facility("elevator"),
+      ensuite: facility("ensuite"),
       exposure: draft.facilities?.exposure || "unknown",
       utilities: /民水民电/.test(String(draft.fees?.utilities || "")) ? "residential" : "unknown",
-      network: draft.facilities?.network || (Number(draft.fees?.network || 0) === 0 ? "included" : "shared")
+      network: draft.facilities?.network && draft.facilities.network !== "unknown"
+        ? draft.facilities.network
+        : monthlyFee("network") === 0
+          ? "included"
+          : monthlyFee("network") > 0
+            ? "shared"
+            : "unknown"
     },
     fees: {
       service: Number(draft.fees?.service || 0),
@@ -473,8 +490,8 @@ export function listingFromSupplyDraft(draft, mandate, index) {
       information: Number(draft.fees?.information || 0),
       viewing: Number(draft.fees?.viewing || 0),
       signing: Number(draft.fees?.signing || 0),
-      propertyMonthly: Number(draft.fees?.property || 0),
-      networkMonthly: Number(draft.fees?.network || 0)
+      propertyMonthly: monthlyFee("property"),
+      networkMonthly: monthlyFee("network")
     },
     verification: {
       identity: draft.evidence?.identity ? "verified" : "missing",

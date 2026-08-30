@@ -43,6 +43,29 @@ test("accepts locations outside the built-in fixture catalog", () => {
   assert.ok(!parsed.coreMissing.includes("location"));
 });
 
+test("居住目标和通勤目的地分开，不把陆家嘴当成想住区域", () => {
+  const parsed = parseDemandText("静安寺附近找房，通勤陆家嘴 25 分钟以内，九月初入住。", "2026-08-23");
+
+  assert.deepEqual(parsed.fields.locations, ["静安寺"]);
+  assert.deepEqual(parsed.fields.targetLocations, ["静安寺"]);
+  assert.deepEqual(parsed.fields.commuteDestinations, ["陆家嘴"]);
+  assert.equal(parsed.fields.city, "上海");
+  assert.ok(!parsed.questions.some((question) => question.fieldKey === "city"));
+});
+
+test("地点语义覆盖住在 A、去 B 上班与 A/B 都可住", () => {
+  const commute = parseDemandText("想住在静安寺，去陆家嘴上班，通勤 25 分钟");
+  assert.deepEqual(commute.fields.locations, ["静安寺"]);
+  assert.deepEqual(commute.fields.commuteDestinations, ["陆家嘴"]);
+
+  const alternatives = parseDemandText("静安寺或陆家嘴都可住，预算 4000");
+  assert.deepEqual(alternatives.fields.locations, ["静安寺", "陆家嘴"]);
+  assert.deepEqual(alternatives.fields.commuteDestinations, []);
+
+  const nearStation = parseDemandText("想住离徐家汇地铁站步行十分钟内，预算 4500");
+  assert.deepEqual(nearStation.fields.locations, ["徐家汇"]);
+});
+
 test("reports only genuinely missing core fields", () => {
   const parsed = parseDemandText("预算不超过 3200，能合租");
 

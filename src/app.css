@@ -887,6 +887,22 @@ button { cursor: pointer; }
   padding: 15px;
 }
 
+.clarification-prompts {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f4f7fb;
+}
+
+.clarification-prompts p {
+  margin: 0;
+  color: #30353c;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
 .dialogue-fields {
   display: grid;
   margin-top: 8px;

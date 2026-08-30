@@ -63,14 +63,33 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   mandate.locations = ["临港新城"];
   mandate.budget = { target: 3000, hardMax: 3400, targetIsPrivate: true, hardMaxIsPrivate: true };
   mandate.moveInWindow = { from: "2026-09-01", to: "2026-09-08" };
-  mandate.maxCommuteMinutes = 40;
+  mandate.maxCommuteMinutes = 25;
+  mandate.leaseMonths = 6;
+  mandate.sharedHousing = false;
+  mandate.roommateGender = null;
+  mandate.hardConstraints.kitchen = false;
   const renterCreated = await request(baseUrl, "/api/tasks", {
     cookie: renterSession.cookie,
     method: "POST",
-    body: { kind: "renter", payload: { mandate, rawText: "临港新城找房" } }
+    body: {
+      kind: "renter",
+      payload: {
+        mandate,
+        rawText: "临港新城找房",
+        inputVersion: 7,
+        fieldStates: { commute: { value: 25, source: "user", confirmationStatus: "user_confirmed", version: 2 } }
+      }
+    }
   });
   assert.equal(renterCreated.response.status, 201);
   assert.equal(renterCreated.payload.candidates.length, 0);
+  const persistedMandate = app.repository.getTask(renterCreated.payload.task.id).payload.mandate;
+  assert.equal(persistedMandate.maxCommuteMinutes, 25);
+  assert.equal(persistedMandate.leaseMonths, 6);
+  assert.equal(persistedMandate.sharedHousing, false);
+  assert.equal(persistedMandate.hardConstraints.kitchen, false);
+  assert.equal(app.repository.getTask(renterCreated.payload.task.id).payload.inputVersion, 7);
+  assert.equal(app.repository.getTask(renterCreated.payload.task.id).payload.fieldStates.commute.value, 25);
 
   const evidenceRefs = {};
   for (const kind of ["identity", "roleDocument", "rightsDocument", "livePhotoChallenge"]) {
@@ -95,6 +114,9 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   draft.address = "浦东新区海港大道 999 号";
   draft.title = "临港新城个人直租";
   draft.availableFrom = "2026-09-03";
+  draft.leaseMonthsMin = 6;
+  draft.roommateCount = 0;
+  draft.roommateGender = null;
   const supplyCreated = await request(baseUrl, "/api/tasks", {
     cookie: supplySession.cookie,
     method: "POST",
@@ -104,6 +126,9 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   assert.equal(supplyCreated.payload.candidates.length, 1);
   assert.match(supplyCreated.payload.candidates[0].displayAlias, /^租客 /);
   assert.equal(supplyCreated.payload.candidates[0].tenant.mandate.budget, undefined);
+  assert.equal(supplyCreated.payload.candidates[0].tenant.mandate.maxCommuteMinutes, 25);
+  assert.equal(supplyCreated.payload.candidates[0].tenant.mandate.leaseMonths, 6);
+  assert.equal(supplyCreated.payload.candidates[0].tenant.mandate.sharedHousing, false);
 
   const renterUpdated = await request(baseUrl, `/api/tasks/${renterCreated.payload.task.id}`, { cookie: renterSession.cookie });
   assert.equal(renterUpdated.response.status, 200);
@@ -138,6 +163,21 @@ test("出租任务必须使用当前会话真实上传的四类材料", async (t
     await fs.rm(tempDir, { recursive: true, force: true });
   });
   const owner = await session(baseUrl);
+  const malicious = await request(baseUrl, "/api/tasks", {
+    cookie: owner.cookie,
+    method: "POST",
+    body: {
+      kind: "supply",
+      payload: {
+        draft: { ...demoSupplyDraft, role: "landlord", fees: { ...demoSupplyDraft.fees, service: 0, intermediary: 0 } },
+        evidenceRefs: {},
+        rawText: "中介代发，签约时收服务费 500 元"
+      }
+    }
+  });
+  assert.equal(malicious.response.status, 422);
+  assert.equal(malicious.payload.code, "SUPPLY_RISK_REJECTED");
+
   const result = await request(baseUrl, "/api/tasks", {
     cookie: owner.cookie,
     method: "POST",
