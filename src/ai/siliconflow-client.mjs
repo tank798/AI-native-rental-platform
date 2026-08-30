@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 
 const DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1";
 const DEFAULT_MODEL = "Qwen/Qwen3.5-35B-A3B";
+const DEFAULT_TIMEOUT_MS = 20_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 function wait(ms) {
@@ -25,31 +26,69 @@ export async function readApiKey(keyFile) {
 
 function extractJson(text) {
   const content = String(text || "").trim();
-  if (!content) throw new Error("模型返回空内容");
+  if (!content) throw modelJsonError();
   try {
     return JSON.parse(content);
   } catch {
     const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-    if (fenced) return JSON.parse(fenced.trim());
+    if (fenced) {
+      try {
+        return JSON.parse(fenced.trim());
+      } catch {
+        throw modelJsonError();
+      }
+    }
     const firstBrace = content.indexOf("{");
     const lastBrace = content.lastIndexOf("}");
-    if (firstBrace >= 0 && lastBrace > firstBrace) return JSON.parse(content.slice(firstBrace, lastBrace + 1));
-    throw new Error("模型返回的内容不是有效 JSON");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(content.slice(firstBrace, lastBrace + 1));
+      } catch {
+        throw modelJsonError();
+      }
+    }
+    throw modelJsonError();
   }
 }
 
+function modelJsonError() {
+  return Object.assign(new Error("模型返回的内容不是有效 JSON"), {
+    code: "MODEL_INVALID_JSON"
+  });
+}
+
+function publicProviderError(stage, cause) {
+  const error = new Error(`[${stage}] AI 服务暂时不可用`);
+  error.code = "AI_PROVIDER_ERROR";
+  error.cause = cause;
+  return error;
+}
+
 export class SiliconFlowClient {
-  constructor({ apiKey, baseUrl = DEFAULT_BASE_URL, model = DEFAULT_MODEL, timeoutMs = 120_000 }) {
+  constructor({
+    apiKey,
+    baseUrl = DEFAULT_BASE_URL,
+    model = DEFAULT_MODEL,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    fetchImpl = globalThis.fetch,
+    sleep = wait,
+    random = Math.random,
+    maxCallRecords = 100
+  }) {
     if (!apiKey) throw new Error("缺少 SiliconFlow API Key");
     this.apiKey = apiKey;
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.model = model;
     this.timeoutMs = timeoutMs;
+    this.fetchImpl = fetchImpl;
+    this.sleep = sleep;
+    this.random = random;
+    this.maxCallRecords = Math.max(1, Number(maxCallRecords) || 100);
     this.calls = [];
   }
 
   async listModels() {
-    const response = await fetch(`${this.baseUrl}/models`, {
+    const response = await this.fetchImpl(`${this.baseUrl}/models`, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
       signal: AbortSignal.timeout(this.timeoutMs)
     });
@@ -66,13 +105,15 @@ export class SiliconFlowClient {
     return { model: this.model, availableModels: models.length };
   }
 
-  async json({ stage, system, user, temperature = 0.1, maxTokens = 4096, retries = 3 }) {
+  async json({ stage, system, user, temperature = 0.1, maxTokens = 4096, retries = 2 }) {
     const startedAt = Date.now();
     let lastError;
+    let repairJson = false;
+    const maxAttempts = Math.min(2, Math.max(1, Number(retries) || 2));
 
-    for (let attempt = 1; attempt <= retries; attempt += 1) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
@@ -81,7 +122,12 @@ export class SiliconFlowClient {
           body: JSON.stringify({
             model: this.model,
             messages: [
-              { role: "system", content: system },
+              {
+                role: "system",
+                content: repairJson
+                  ? `${system}\n\n上一次响应不是有效 JSON。请只返回严格合法的 JSON 对象。`
+                  : system
+              },
               { role: "user", content: user }
             ],
             response_format: { type: "json_object" },
@@ -96,31 +142,63 @@ export class SiliconFlowClient {
 
         const raw = await response.text();
         if (!response.ok) {
-          const error = new Error(`SiliconFlow HTTP ${response.status}: ${raw.slice(0, 240)}`);
+          const error = new Error(`SiliconFlow HTTP ${response.status}`);
           error.status = response.status;
           throw error;
         }
 
-        const payload = JSON.parse(raw);
+        let payload;
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          throw modelJsonError();
+        }
         const content = payload?.choices?.[0]?.message?.content;
         const result = extractJson(content);
         this.calls.push({
           stage,
           attempt,
+          model: this.model,
+          status: "success",
+          schema_success: true,
           latency_ms: Date.now() - startedAt,
           usage: payload.usage || null,
           trace_id: response.headers.get("x-siliconcloud-trace-id") || null
         });
+        if (this.calls.length > this.maxCallRecords) {
+          this.calls.splice(0, this.calls.length - this.maxCallRecords);
+        }
         return result;
       } catch (error) {
         lastError = error;
-        const retryable = error?.name === "TimeoutError" || RETRYABLE_STATUS.has(error?.status);
-        if (!retryable || attempt === retries) break;
-        await wait(650 * 2 ** (attempt - 1));
+        const invalidJson = error?.code === "MODEL_INVALID_JSON";
+        const retryable = invalidJson
+          || error?.name === "TimeoutError"
+          || error?.name === "AbortError"
+          || error instanceof TypeError
+          || RETRYABLE_STATUS.has(error?.status);
+        if (!retryable || attempt === maxAttempts) break;
+        repairJson = invalidJson;
+        const jitter = 0.75 + Math.max(0, Math.min(1, Number(this.random()) || 0)) * 0.5;
+        await this.sleep(Math.round(650 * 2 ** (attempt - 1) * jitter));
       }
     }
 
-    throw new Error(`[${stage}] ${lastError?.message || "未知模型调用错误"}`);
+    this.calls.push({
+      stage,
+      attempt: maxAttempts,
+      model: this.model,
+      status: "error",
+      schema_success: lastError?.code !== "MODEL_INVALID_JSON",
+      error_code: lastError?.code || (lastError?.status ? `HTTP_${lastError.status}` : "AI_PROVIDER_ERROR"),
+      latency_ms: Date.now() - startedAt,
+      usage: null,
+      trace_id: null
+    });
+    if (this.calls.length > this.maxCallRecords) {
+      this.calls.splice(0, this.calls.length - this.maxCallRecords);
+    }
+    throw publicProviderError(stage, lastError);
   }
 
   usageSummary() {
@@ -140,5 +218,6 @@ export class SiliconFlowClient {
 
 export const siliconFlowDefaults = {
   baseUrl: DEFAULT_BASE_URL,
-  model: DEFAULT_MODEL
+  model: DEFAULT_MODEL,
+  timeoutMs: DEFAULT_TIMEOUT_MS
 };

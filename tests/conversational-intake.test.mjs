@@ -183,3 +183,21 @@ test("模型补充字段不能覆盖规则解析出的明确事实", async () =>
     globalThis.fetch = originalFetch;
   }
 });
+
+test("模型字段类型错误时使用稳定警告降级且不回显 provider 内容", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ renters: [{ locations: "错误字符串" }] }) } }]
+  }), { status: 200 });
+  try {
+    const intake = createIntakeService({ apiKey: "test-key" });
+    const result = await intake.parseRenter("静安寺找房，预算 3500", referenceDate);
+
+    assert.equal(result.provider, "deterministic");
+    assert.equal(result.warningCode, "AI_DEGRADED");
+    assert.equal(result.warning, "AI 暂时不可用，已使用确定性解析");
+    assert.doesNotMatch(result.warning, /locations|MODEL_SCHEMA|provider/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

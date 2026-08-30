@@ -1,4 +1,4 @@
-const CACHE_NAME = "zhunaer-app-shell-v3";
+const CACHE_NAME = "zhunaer-app-shell-v4";
 const APP_SHELL = [
   "./",
   "./index.html",

@@ -2,6 +2,7 @@ import { parseDemandText } from "../demand-parser.mjs";
 import { parseSupplyText } from "../supply-parser.mjs";
 import { renterRuntimePrompt, supplyRuntimePrompt } from "../ai/prompts.mjs";
 import { readApiKey, SiliconFlowClient, siliconFlowDefaults } from "../ai/siliconflow-client.mjs";
+import { parseRenterModelPayload, parseSupplyModelPayload } from "./schemas.mjs";
 
 function hasValue(value) {
   return value !== null && value !== undefined && value !== "";
@@ -150,7 +151,12 @@ function mergeSupply(ruleResult, aiResult) {
   };
 }
 
-export function createIntakeService({ apiKey = null, keyFile = null, model = siliconFlowDefaults.model } = {}) {
+export function createIntakeService({
+  apiKey = null,
+  keyFile = null,
+  model = siliconFlowDefaults.model,
+  clientOptions = {}
+} = {}) {
   let clientPromise = null;
 
   async function client() {
@@ -158,7 +164,7 @@ export function createIntakeService({ apiKey = null, keyFile = null, model = sil
     if (!clientPromise) {
       clientPromise = (async () => {
         const resolvedKey = apiKey || await readApiKey(keyFile);
-        return new SiliconFlowClient({ apiKey: resolvedKey, model });
+        return new SiliconFlowClient({ apiKey: resolvedKey, model, ...clientOptions });
       })();
     }
     return clientPromise;
@@ -166,15 +172,16 @@ export function createIntakeService({ apiKey = null, keyFile = null, model = sil
 
   async function withAi({ stage, prompt, select, ruleResult, merge }) {
     const aiClient = await client();
-    if (!aiClient) return { parsed: ruleResult, provider: "deterministic", warning: null };
+    if (!aiClient) return { parsed: ruleResult, provider: "deterministic", warning: null, warningCode: null };
     try {
       const payload = await aiClient.json({ stage, system: prompt.system, user: prompt.user, maxTokens: 2200 });
-      return { parsed: merge(ruleResult, select(payload)), provider: "siliconflow", warning: null };
-    } catch (error) {
+      return { parsed: merge(ruleResult, select(payload)), provider: "siliconflow", warning: null, warningCode: null };
+    } catch {
       return {
         parsed: ruleResult,
         provider: "deterministic",
-        warning: `AI 暂时不可用，已使用确定性解析：${error.message}`
+        warning: "AI 暂时不可用，已使用确定性解析",
+        warningCode: "AI_DEGRADED"
       };
     }
   }
@@ -184,12 +191,30 @@ export function createIntakeService({ apiKey = null, keyFile = null, model = sil
       return { configured: Boolean(apiKey || keyFile), model: apiKey || keyFile ? model : null };
     },
 
+    parseRenterDeterministic(text, referenceDate) {
+      return {
+        parsed: parseDemandText(text, referenceDate),
+        provider: "deterministic",
+        warning: "AI 预算已达当日上限，已使用确定性解析",
+        warningCode: "AI_DEGRADED"
+      };
+    },
+
+    parseSupplyDeterministic(text, referenceDate) {
+      return {
+        parsed: parseSupplyText(text, referenceDate),
+        provider: "deterministic",
+        warning: "AI 预算已达当日上限，已使用确定性解析",
+        warningCode: "AI_DEGRADED"
+      };
+    },
+
     async parseRenter(text, referenceDate) {
       const ruleResult = parseDemandText(text, referenceDate);
       return withAi({
         stage: "runtime_renter_intake",
         prompt: renterRuntimePrompt(text, referenceDate),
-        select: (payload) => payload?.renters?.[0] || null,
+        select: parseRenterModelPayload,
         ruleResult,
         merge: mergeRenter
       });
@@ -200,7 +225,7 @@ export function createIntakeService({ apiKey = null, keyFile = null, model = sil
       return withAi({
         stage: "runtime_supply_intake",
         prompt: supplyRuntimePrompt(text, referenceDate),
-        select: (payload) => payload?.listings?.[0] || null,
+        select: parseSupplyModelPayload,
         ruleResult,
         merge: mergeSupply
       });

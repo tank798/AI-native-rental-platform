@@ -63,6 +63,18 @@ export function openRentalDatabase(filename) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      revoked_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS sessions_profile_idx ON sessions(profile_id, expires_at DESC);
+
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -109,6 +121,17 @@ export function openRentalDatabase(filename) {
   const statements = {
     createProfile: db.prepare("INSERT INTO profiles(id, token_hash, created_at) VALUES (?, ?, ?)"),
     profileByToken: db.prepare("SELECT * FROM profiles WHERE token_hash = ?"),
+    insertSession: db.prepare(`
+      INSERT INTO sessions(id, profile_id, token_hash, created_at, expires_at, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `),
+    sessionByTokenHash: db.prepare(`
+      SELECT id, profile_id, created_at, expires_at, last_seen_at
+      FROM sessions
+      WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
+    `),
+    touchSession: db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL"),
+    revokeSession: db.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL"),
     insertEvidence: db.prepare(`
       INSERT INTO evidence_uploads(id, owner_id, kind, storage_path, original_name, mime_type, sha256, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -165,6 +188,33 @@ export function openRentalDatabase(filename) {
     findProfileByTokenHash(tokenHash) {
       const row = statements.profileByToken.get(tokenHash);
       return row ? { id: row.id, createdAt: row.created_at } : null;
+    },
+
+    createSession({ id, profileId, tokenHash, createdAt, expiresAt }) {
+      statements.insertSession.run(id, profileId, tokenHash, createdAt, expiresAt, createdAt);
+      return { id, profileId, createdAt, expiresAt, lastSeenAt: createdAt };
+    },
+
+    findSessionByTokenHash(tokenHash, at = now()) {
+      const row = statements.sessionByTokenHash.get(tokenHash, at);
+      return row
+        ? {
+            id: row.id,
+            sessionId: row.id,
+            profileId: row.profile_id,
+            createdAt: row.created_at,
+            expiresAt: row.expires_at,
+            lastSeenAt: row.last_seen_at
+          }
+        : null;
+    },
+
+    touchSession(id, at = now()) {
+      return statements.touchSession.run(at, id).changes > 0;
+    },
+
+    revokeSession(id, at = now()) {
+      return statements.revokeSession.run(at, id).changes > 0;
     },
 
     addEvidence({ id, ownerId, kind, storagePath, originalName, mimeType, sha256 }) {

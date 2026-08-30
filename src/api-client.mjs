@@ -1,24 +1,11 @@
-const SESSION_KEY = "zhunaer-server-session-v1";
 let sessionPromise = null;
-
-function storedSession() {
-  try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
-  } catch {
-    return null;
-  }
-}
-
-function saveSession(session) {
-  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  return session;
-}
 
 async function responseJson(response) {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(payload.error || `请求失败：HTTP ${response.status}`);
     error.status = response.status;
+    error.code = payload.code;
     error.details = payload.details;
     throw error;
   }
@@ -28,10 +15,13 @@ async function responseJson(response) {
 export async function ensureServerSession() {
   if (sessionPromise) return sessionPromise;
   sessionPromise = (async () => {
-    const existing = storedSession();
-    if (existing?.token && existing?.userId) return existing;
-    const response = await fetch("/api/session", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    return saveSession(await responseJson(response));
+    const response = await fetch("/api/session", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    });
+    return responseJson(response);
   })();
   try {
     return await sessionPromise;
@@ -42,22 +32,31 @@ export async function ensureServerSession() {
 }
 
 export async function getServerHealth() {
-  const response = await fetch("/api/health", { cache: "no-store" });
+  const response = await fetch("/api/health", { cache: "no-store", credentials: "same-origin" });
+  return responseJson(response);
+}
+
+export async function revokeServerSession() {
+  const response = await fetch("/api/session", {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" }
+  });
+  sessionPromise = null;
   return responseJson(response);
 }
 
 async function apiRequest(path, options = {}, retried = false) {
-  const session = await ensureServerSession();
+  await ensureServerSession();
   const response = await fetch(path, {
     ...options,
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${session.token}`,
       ...(options.headers || {})
     }
   });
   if (response.status === 401 && !retried) {
-    localStorage.removeItem(SESSION_KEY);
     sessionPromise = null;
     return apiRequest(path, options, true);
   }
