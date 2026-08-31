@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createClock } from "../clock.mjs";
+import { latestSchemaVersion, runMigrations } from "./migrations.mjs";
 
 function parseJson(value, fallback = null) {
   if (!value) return fallback;
@@ -24,9 +27,11 @@ function taskFromRow(row) {
     suitable: Number(row.suitable || 0),
     runCount: Number(row.run_count || 0),
     candidateVersion: Number(row.candidate_version || 0),
+    inputVersion: Number(row.input_version || 1),
+    clientRequestId: row.client_request_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    lastMatchAt: row.last_match_at,
+    lastMatchAt: row.last_matched_at || row.last_match_at,
     expiresAt: row.expires_at
   };
 }
@@ -42,93 +47,54 @@ function candidateFromRow(row) {
   };
 }
 
+function configureConnection(database) {
+  database.exec("PRAGMA journal_mode = WAL");
+  database.exec("PRAGMA foreign_keys = ON");
+  database.exec("PRAGMA busy_timeout = 5000");
+}
+
+function prepareStorage(filename) {
+  if (filename === ":memory:") return;
+  const directory = path.dirname(path.resolve(filename));
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(directory, 0o700);
+}
+
+function secureDatabaseFile(filename) {
+  if (filename !== ":memory:" && fs.existsSync(filename)) fs.chmodSync(filename, 0o600);
+}
+
+function hasUserTables(database) {
+  return Boolean(database.prepare(`
+    SELECT 1 AS present
+    FROM sqlite_schema
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+    LIMIT 1
+  `).get());
+}
+
+function backupBeforeMigration(database, filename) {
+  if (filename === ":memory:" || !hasUserTables(database)) return { database, backupPath: null };
+  const currentVersion = Number(database.prepare("PRAGMA user_version").get().user_version || 0);
+  if (currentVersion >= latestSchemaVersion) return { database, backupPath: null };
+  database.exec("PRAGMA wal_checkpoint(FULL)");
+  database.close();
+  const backupPath = `${filename}.pre-v${currentVersion}.bak`;
+  if (!fs.existsSync(backupPath)) fs.copyFileSync(filename, backupPath, fs.constants.COPYFILE_EXCL);
+  fs.chmodSync(backupPath, 0o600);
+  const reopened = new DatabaseSync(filename);
+  configureConnection(reopened);
+  return { database: reopened, backupPath };
+}
+
 export function openRentalDatabase(filename, { clock = createClock() } = {}) {
-  const db = new DatabaseSync(filename);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS profiles (
-      id TEXT PRIMARY KEY,
-      token_hash TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS evidence_uploads (
-      id TEXT PRIMARY KEY,
-      owner_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL,
-      storage_path TEXT NOT NULL,
-      original_name TEXT NOT NULL,
-      mime_type TEXT NOT NULL,
-      sha256 TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-      token_hash TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      last_seen_at TEXT NOT NULL,
-      revoked_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS sessions_profile_idx ON sessions(profile_id, expires_at DESC);
-
-    CREATE TABLE IF NOT EXISTS evidence_reviews (
-      id TEXT PRIMARY KEY,
-      evidence_id TEXT NOT NULL REFERENCES evidence_uploads(id) ON DELETE CASCADE,
-      reviewer TEXT NOT NULL,
-      method TEXT NOT NULL CHECK(method = 'manual_review'),
-      result TEXT NOT NULL CHECK(result IN ('approved', 'rejected')),
-      reviewed_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS evidence_reviews_latest_idx ON evidence_reviews(evidence_id, reviewed_at DESC);
-
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      owner_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL CHECK(kind IN ('renter', 'supply')),
-      status TEXT NOT NULL CHECK(status IN ('active', 'paused', 'closed', 'expired')),
-      label TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      scanned INTEGER NOT NULL DEFAULT 0,
-      suitable INTEGER NOT NULL DEFAULT 0,
-      run_count INTEGER NOT NULL DEFAULT 0,
-      candidate_version INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      last_match_at TEXT,
-      expires_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS tasks_owner_status_idx ON tasks(owner_id, status, created_at DESC);
-    CREATE INDEX IF NOT EXISTS tasks_kind_status_idx ON tasks(kind, status, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS match_candidates (
-      id TEXT PRIMARY KEY,
-      receiver_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-      counterparty_id TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE(receiver_task_id, counterparty_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS candidates_receiver_idx ON match_candidates(receiver_task_id, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS audit_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-      type TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS events_task_idx ON audit_events(task_id, id DESC);
-  `);
+  prepareStorage(filename);
+  let db = new DatabaseSync(filename);
+  configureConnection(db);
+  const prepared = backupBeforeMigration(db, filename);
+  db = prepared.database;
+  runMigrations(db);
+  secureDatabaseFile(filename);
 
   const statements = {
     createProfile: db.prepare("INSERT INTO profiles(id, token_hash, created_at) VALUES (?, ?, ?)"),
@@ -163,8 +129,8 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       LIMIT 1
     `),
     insertTask: db.prepare(`
-      INSERT INTO tasks(id, owner_id, kind, status, label, payload_json, created_at, updated_at, expires_at)
-      VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)
+      INSERT INTO tasks(id, owner_id, kind, status, label, payload_json, input_version, client_request_id, created_at, updated_at, expires_at)
+      VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
     `),
     taskById: db.prepare("SELECT * FROM tasks WHERE id = ?"),
     tasksByOwner: db.prepare("SELECT * FROM tasks WHERE owner_id = ? ORDER BY created_at DESC"),
@@ -175,7 +141,7 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
     updateTaskRun: db.prepare(`
       UPDATE tasks
       SET scanned = ?, suitable = ?, run_count = run_count + 1,
-          candidate_version = candidate_version + ?, updated_at = ?, last_match_at = ?
+          candidate_version = candidate_version + ?, updated_at = ?, last_match_at = ?, last_matched_at = ?
       WHERE id = ?
     `),
     updateTaskStatus: db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND owner_id = ?"),
@@ -204,6 +170,7 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
 
   return {
     raw: db,
+    migrationBackupPath: prepared.backupPath,
 
     createProfile({ id, tokenHash }) {
       statements.createProfile.run(id, tokenHash, now());
@@ -277,9 +244,9 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
         : null;
     },
 
-    createTask({ id, ownerId, kind, label, payload, expiresAt }) {
+    createTask({ id, ownerId, kind, label, payload, expiresAt, inputVersion = payload?.inputVersion || 1, clientRequestId = null }) {
       const at = now();
-      statements.insertTask.run(id, ownerId, kind, label, JSON.stringify(payload), at, at, expiresAt);
+      statements.insertTask.run(id, ownerId, kind, label, JSON.stringify(payload), inputVersion, clientRequestId, at, at, expiresAt);
       appendEvent(id, "task.created", { kind, label }, at);
       return this.getTask(id);
     },
@@ -359,7 +326,7 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
           changed = true;
         }
 
-        statements.updateTaskRun.run(scanned, candidates.length, changed ? 1 : 0, at, at, taskId);
+        statements.updateTaskRun.run(scanned, candidates.length, changed ? 1 : 0, at, at, at, taskId);
         if (changed) {
           appendEvent(taskId, "candidate.set_changed", {
             total: candidates.length,

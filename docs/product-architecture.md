@@ -165,11 +165,23 @@ flowchart LR
 
 当前闭环的验证范围是本地单进程服务：SQLite 承载业务数据，本地私有目录承载材料，轮询与同步调度承载持续重算。生产迁移将这些适配器替换为 PostgreSQL、私有对象存储、队列和推送，同时保持 `owner_id` 隔离、服务端证据引用校验、公开字段脱敏和 real/demo 分流语义。
 
+### 6.2 SQLite 版本与升级边界
+
+本地数据库使用 `PRAGMA user_version` 管理连续版本，当前 schema 版本为 3。迁移顺序由 `src/server/migrations.mjs` 显式声明，对应 SQL 文件为：
+
+1. `001-baseline.sql`：保留 v0.6 会话、材料、任务、候选和审计事件结构。
+2. `002-task-fields-and-outbox.sql`：增加任务输入版本、字段级真值和去重 outbox。
+3. `003-bilateral-match-cases.sql`：增加双边案例、条款、澄清、确认、联系授权、媒体和案例事件表。
+
+每个版本在独立 SQLite 事务中执行；SQL 执行和 `user_version` 更新共同成功后才提交。程序读到更高版本时会拒绝启动，保护新 schema 免受旧程序写入。有表的旧库升级前会先执行 WAL checkpoint，再在同目录生成 `<database>.pre-v<version>.bak` 备份。
+
+连接统一开启 `foreign_keys=ON`、`journal_mode=WAL` 和 `busy_timeout=5000`。数据目录权限为 0700，SQLite 文件与迁移备份权限为 0600。任务对、open 澄清字段、同版条款确认和 outbox dedupe key 都由数据库唯一约束保证幂等。
+
 ## 7. 数据库与用户隔离
 
 需要数据库，而且不是“每人一个数据库”。本地闭环用 SQLite 验证数据流，生产更合适的方案是同一套 PostgreSQL 中所有用户数据带 `owner_id`，再用行级安全策略做强制隔离。对象存储也按用户与任务分路径并设置同样的访问规则。
 
-本地服务当前已落地的表是 `profiles`、`evidence_uploads`、`tasks`、`match_candidates` 和 `audit_events`。API 层会在每次读取任务和证据时检查当前会话的 `owner_id`；生产迁移时应把这层检查下沉为数据库 RLS，并补齐身份、核验、媒体、举报和主体处罚表。
+本地服务的版本化 schema 已落地会话、材料提交与人工审核、任务与字段真值、候选、双边案例、条款、澄清、确认、联系授权、媒体、outbox 和审计事件表。API 层会在每次读取任务和证据时检查当前会话的 `owner_id`；生产 PostgreSQL 适配器将同一所有权语义下沉为数据库 RLS，并沿用相同的服务端公开投影边界。
 
 ### 7.1 核心表
 
