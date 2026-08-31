@@ -68,12 +68,7 @@ export function createEmptySupplyDraft({ city = "上海" } = {}) {
       exposure: "unknown",
       network: "unknown"
     },
-    evidence: {
-      identity: false,
-      roleDocument: false,
-      rightsDocument: false,
-      livePhotoChallenge: false
-    }
+    verification: {}
   };
 }
 

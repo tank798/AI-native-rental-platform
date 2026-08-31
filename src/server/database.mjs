@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { createClock } from "../clock.mjs";
 
 function parseJson(value, fallback = null) {
   if (!value) return fallback;
@@ -41,7 +42,7 @@ function candidateFromRow(row) {
   };
 }
 
-export function openRentalDatabase(filename) {
+export function openRentalDatabase(filename, { clock = createClock() } = {}) {
   const db = new DatabaseSync(filename);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
@@ -74,6 +75,17 @@ export function openRentalDatabase(filename) {
     );
 
     CREATE INDEX IF NOT EXISTS sessions_profile_idx ON sessions(profile_id, expires_at DESC);
+
+    CREATE TABLE IF NOT EXISTS evidence_reviews (
+      id TEXT PRIMARY KEY,
+      evidence_id TEXT NOT NULL REFERENCES evidence_uploads(id) ON DELETE CASCADE,
+      reviewer TEXT NOT NULL,
+      method TEXT NOT NULL CHECK(method = 'manual_review'),
+      result TEXT NOT NULL CHECK(result IN ('approved', 'rejected')),
+      reviewed_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS evidence_reviews_latest_idx ON evidence_reviews(evidence_id, reviewed_at DESC);
 
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
@@ -137,6 +149,19 @@ export function openRentalDatabase(filename) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `),
     evidenceById: db.prepare("SELECT * FROM evidence_uploads WHERE id = ? AND owner_id = ?"),
+    evidenceOwner: db.prepare("SELECT owner_id FROM evidence_uploads WHERE id = ?"),
+    insertEvidenceReview: db.prepare(`
+      INSERT INTO evidence_reviews(id, evidence_id, reviewer, method, result, reviewed_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `),
+    latestEvidenceReview: db.prepare(`
+      SELECT reviews.*
+      FROM evidence_reviews AS reviews
+      JOIN evidence_uploads AS evidence ON evidence.id = reviews.evidence_id
+      WHERE reviews.evidence_id = ? AND evidence.owner_id = ?
+      ORDER BY reviews.reviewed_at DESC, reviews.rowid DESC
+      LIMIT 1
+    `),
     insertTask: db.prepare(`
       INSERT INTO tasks(id, owner_id, kind, status, label, payload_json, created_at, updated_at, expires_at)
       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?)
@@ -170,7 +195,7 @@ export function openRentalDatabase(filename) {
   };
 
   function now() {
-    return new Date().toISOString();
+    return clock.nowIso();
   }
 
   function appendEvent(taskId, type, payload, at = now()) {
@@ -226,6 +251,29 @@ export function openRentalDatabase(filename) {
       const row = statements.evidenceById.get(id, ownerId);
       return row
         ? { id: row.id, ownerId: row.owner_id, kind: row.kind, storagePath: row.storage_path, mimeType: row.mime_type }
+        : null;
+    },
+
+    getEvidenceOwner(id) {
+      return statements.evidenceOwner.get(id)?.owner_id || null;
+    },
+
+    addEvidenceReview({ id = randomUUID(), evidenceId, reviewer, method, result, reviewedAt = now() }) {
+      statements.insertEvidenceReview.run(id, evidenceId, reviewer, method, result, reviewedAt);
+      return { id, evidenceId, reviewer, method, result, reviewedAt };
+    },
+
+    latestEvidenceReview(evidenceId, ownerId) {
+      const row = statements.latestEvidenceReview.get(evidenceId, ownerId);
+      return row
+        ? {
+            id: row.id,
+            evidenceId: row.evidence_id,
+            reviewer: row.reviewer,
+            method: row.method,
+            result: row.result,
+            reviewedAt: row.reviewed_at
+          }
         : null;
     },
 

@@ -1,19 +1,9 @@
-const DAY_MS = 24 * 60 * 60 * 1000;
+import { addDaysToIso, daysBetweenIsoDates } from "./clock.mjs";
 
-function toUtcDay(value) {
-  const text = String(value || "");
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
-  if (!match) throw new TypeError(`Invalid ISO date: ${text}`);
-  return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-}
-
-export function addDaysToIso(isoDate, days) {
-  const date = new Date(toUtcDay(isoDate) + Number(days) * DAY_MS);
-  return date.toISOString().slice(0, 10);
-}
+export { addDaysToIso } from "./clock.mjs";
 
 export function daysUntil(isoDate, nowIso) {
-  return Math.ceil((toUtcDay(isoDate) - toUtcDay(nowIso)) / DAY_MS);
+  return daysBetweenIsoDates(nowIso, isoDate);
 }
 
 export function createTaskLifecycle(createdAt, { durationDays = 30, renewalLeadDays = 5 } = {}) {

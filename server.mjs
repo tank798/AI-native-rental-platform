@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { createClock, isoTimestampAfterDays } from "./src/clock.mjs";
 import { validateSupplyDraft } from "./src/simulation-engine.mjs";
 import { parseSupplyText } from "./src/supply-parser.mjs";
 import { openRentalDatabase } from "./src/server/database.mjs";
@@ -16,6 +17,7 @@ import { assertSameOrigin, httpError, readJson } from "./src/server/request-guar
 import { normalizeMarketMode, readRuntimeConfig } from "./src/server/runtime-config.mjs";
 import { parseIntakeRequest, parseTaskCreateRequest } from "./src/server/schemas.mjs";
 import { createSessionService } from "./src/server/session-service.mjs";
+import { createVerificationService } from "./src/server/verification-service.mjs";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const EVIDENCE_JSON_LIMIT = 12 * 1024 * 1024;
@@ -85,12 +87,6 @@ function securityHeaders() {
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function isoDateAfter(days) {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString();
 }
 
 function json(response, status, payload, extraHeaders = {}) {
@@ -183,13 +179,15 @@ export function createRentalServer(options = {}) {
   const marketMode = normalizeMarketMode(options.marketMode ?? runtimeConfig.marketMode);
   const secureCookies = options.secureCookies ?? environment.NODE_ENV === "production";
   const rateLimitPolicy = rateLimitPolicyFrom(environment, options.rateLimitPolicy);
+  const clock = options.clock || createClock();
 
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   fs.mkdirSync(uploadRoot, { recursive: true });
-  const repository = openRentalDatabase(databasePath);
-  const matching = createMatchingService(repository, { marketMode });
-  const sessions = createSessionService({ repository, secureCookies });
-  const rateLimiter = options.rateLimiter || createRateLimiter();
+  const repository = openRentalDatabase(databasePath, { clock });
+  const verification = createVerificationService({ repository, clock });
+  const matching = createMatchingService(repository, { marketMode, clock });
+  const sessions = createSessionService({ repository, secureCookies, now: clock.now });
+  const rateLimiter = options.rateLimiter || createRateLimiter({ now: clock.nowMs });
   const intake = createIntakeService({
     apiKey: aiApiKey,
     keyFile: aiKeyFile,
@@ -277,19 +275,23 @@ export function createRentalServer(options = {}) {
       mimeType,
       sha256: sha256(buffer)
     });
-    return { id, kind: body.kind, uploaded: true };
+    const status = verification.statusFor(id, session.id);
+    return { id, kind: body.kind, uploaded: true, ...status };
   }
 
   function verifiedDraft(body, session) {
     const refs = body?.evidenceRefs || {};
     const draft = structuredClone(body?.draft || {});
     draft.evidenceRefs = {};
-    draft.evidence = {};
+    // Client-supplied verification claims are discarded. Only persisted review
+    // records owned by this session can become verification facts on the task.
+    draft.verification = {};
     for (const kind of EVIDENCE_KINDS) {
       const evidence = refs[kind] ? repository.getEvidence(refs[kind], session.id) : null;
       const valid = Boolean(evidence && evidence.kind === kind);
-      draft.evidence[kind] = valid;
-      if (valid) draft.evidenceRefs[kind] = evidence.id;
+      if (!valid) continue;
+      draft.evidenceRefs[kind] = evidence.id;
+      draft.verification[kind] = verification.statusFor(evidence.id, session.id);
     }
     return draft;
   }
@@ -310,13 +312,13 @@ export function createRentalServer(options = {}) {
       };
       label = mandate.locations.slice(0, 2).join(" / ");
     } else {
-      const rawSupply = parseSupplyText(body.payload.rawText, new Date().toISOString().slice(0, 10));
+      const rawSupply = parseSupplyText(body.payload.rawText, clock.todayInShanghai());
       const criticalRisk = rawSupply.riskSignals.filter((signal) => ["broker_role", "role_conflict", "prohibited_fee"].includes(signal));
       if (criticalRisk.length) {
         throw httpError(422, "SUPPLY_RISK_REJECTED", "只接受房东本人或当前租客的零收费房源", { reasonCodes: criticalRisk });
       }
       const draft = verifiedDraft(body.payload, session);
-      const validation = validateSupplyDraft(draft);
+      const validation = validateSupplyDraft(draft, { clock });
       if (!validation.valid) throw Object.assign(new Error(validation.errors[0]), { status: 422, details: validation.errors });
       payload = {
         draft,
@@ -326,7 +328,7 @@ export function createRentalServer(options = {}) {
       };
       label = draft.title || `${draft.location}个人房源`;
     }
-    repository.createTask({ id, ownerId: session.id, kind: body.kind, label, payload, expiresAt: isoDateAfter(30) });
+    repository.createTask({ id, ownerId: session.id, kind: body.kind, label, payload, expiresAt: isoTimestampAfterDays(clock, 30) });
     matching.processAfterTaskCreated(id);
     const snapshot = matching.snapshot(id);
     return json(response, 201, { ...snapshot, task: publicTask(snapshot.task) });
@@ -376,6 +378,12 @@ export function createRentalServer(options = {}) {
       assertSameOrigin(request);
       enforceWriteLimit(request, session);
       return json(response, 201, await uploadEvidence(request, session));
+    }
+    const evidenceMatch = url.pathname.match(/^\/api\/evidence\/([^/]+)$/);
+    if (request.method === "GET" && evidenceMatch) {
+      const status = verification.statusFor(decodeURIComponent(evidenceMatch[1]), session.id);
+      if (!status) return json(response, 404, { error: "材料不存在", code: "EVIDENCE_NOT_FOUND" });
+      return json(response, 200, status);
     }
     if (request.method === "POST" && url.pathname === "/api/tasks") {
       assertSameOrigin(request);
@@ -443,6 +451,8 @@ export function createRentalServer(options = {}) {
     server,
     repository,
     matching,
+    verification,
+    clock,
     intake,
     sessions,
     rateLimiter,

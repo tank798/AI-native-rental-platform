@@ -4,6 +4,7 @@ import {
   matchMandate,
   matchSupplyDraft
 } from "../simulation-engine.mjs";
+import { createClock } from "../clock.mjs";
 import { normalizeMarketMode } from "./runtime-config.mjs";
 
 function renterLabel(task) {
@@ -62,7 +63,7 @@ function candidateCounterparty(candidate, fallbackPrefix) {
  * Real mode only compares persisted tasks; demo mode additionally scans the
  * fixture corpus so product demonstrations remain available and explicit.
  */
-export function createMatchingService(repository, { marketMode = "real" } = {}) {
+export function createMatchingService(repository, { marketMode = "real", clock = createClock() } = {}) {
   const normalizedMarketMode = normalizeMarketMode(marketMode);
 
   function renterPool(task) {
@@ -98,7 +99,7 @@ export function createMatchingService(repository, { marketMode = "real" } = {}) 
 
   function processRenter(task) {
     const pool = renterPool(task);
-    const result = matchMandate(task.payload.mandate, pool, { startedAt: new Date().toISOString() });
+    const result = matchMandate(task.payload.mandate, pool, { clock });
     const candidates = result.candidates.map((candidate) => ({
       counterpartyId: candidateCounterparty(candidate, "seed-listing"),
       payload: publicListing(candidate)
@@ -109,7 +110,7 @@ export function createMatchingService(repository, { marketMode = "real" } = {}) 
 
   function processSupply(task) {
     const pool = supplyPool(task);
-    const result = matchSupplyDraft(task.payload.draft, pool);
+    const result = matchSupplyDraft(task.payload.draft, pool, { clock });
     const counts = new Map();
     result.candidates.forEach((candidate) => {
       counts.set(candidate.tenant.alias, (counts.get(candidate.tenant.alias) || 0) + 1);

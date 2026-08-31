@@ -10,6 +10,7 @@ import {
   runRegressionSuite,
   validateSupplyDraft
 } from "../src/simulation-engine.mjs";
+import { createClock } from "../src/clock.mjs";
 
 const byId = (id) => listings.find((listing) => listing.id === id);
 
@@ -94,6 +95,14 @@ test("发布端只接受房东本人或当前承租人", () => {
   const result = validateSupplyDraft({ ...demoSupplyDraft, role: "broker" });
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((item) => item.includes("只允许")));
+});
+
+test("可入住日期使用注入的实时时钟，不读固定模拟日期", () => {
+  const clock = createClock({ now: () => new Date("2026-08-29T16:00:00.000Z") });
+  const result = validateSupplyDraft({ ...demoSupplyDraft, availableFrom: "2026-08-25" }, { clock });
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((item) => item.includes("可入住日期不能早于今天")));
 });
 
 test("发布端禁止服务费和中介费", () => {

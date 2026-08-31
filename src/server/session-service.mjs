@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createClock, isoTimestampFromMilliseconds } from "../clock.mjs";
 
 const COOKIE_NAME = "zhunaer_session";
 const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -23,7 +24,7 @@ function cookieValue(cookieHeader, name) {
  */
 export function createSessionService({
   repository,
-  now = () => new Date(),
+  now = createClock().now,
   ttlMs = DEFAULT_TTL_MS,
   secureCookies = false
 }) {
@@ -48,7 +49,7 @@ export function createSessionService({
       const sessionId = randomBytes(16).toString("hex");
       const token = randomBytes(32).toString("base64url");
       const tokenHash = sha256(token);
-      const expiresAt = new Date(issuedAt.getTime() + ttlMs).toISOString();
+      const expiresAt = isoTimestampFromMilliseconds(issuedAt.getTime() + ttlMs);
 
       // profiles.token_hash remains populated during the v0.6→v0.7 migration;
       // authentication itself is performed exclusively against sessions.

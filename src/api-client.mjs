@@ -115,3 +115,7 @@ export async function uploadEvidenceFile(file, kind) {
     body: JSON.stringify({ kind, name: file.name, mimeType: file.type, data })
   });
 }
+
+export function getEvidenceStatus(evidenceId) {
+  return apiRequest(`/api/evidence/${encodeURIComponent(evidenceId)}`);
+}

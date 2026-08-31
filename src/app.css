@@ -1119,6 +1119,7 @@ button { cursor: pointer; }
 
 .evidence-upload-row > span .icon { width: 16px; }
 .evidence-upload-row.is-complete > span { background: #e9f7ef; color: #16824b; }
+.evidence-upload-row.is-pending > span { background: #fff5df; color: #9a6810; }
 .evidence-upload-row b { display: block; font-size: 14px; }
 .evidence-upload-row p { margin: 3px 0 0; color: #8b9098; font-size: 11px; }
 .evidence-upload-row > button {

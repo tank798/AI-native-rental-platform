@@ -1,3 +1,5 @@
+import { addDaysToIso, createClock, daysInIsoMonth } from "./clock.mjs";
+
 const LOCATION_CATALOG = [
   "静安寺",
   "江苏路",
@@ -23,14 +25,7 @@ const LOCATION_CATALOG = [
 ];
 
 function currentDateInShanghai() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return createClock().todayInShanghai();
 }
 
 function pad(value) {
@@ -47,13 +42,11 @@ function dateParts(value) {
 }
 
 function addDays(value, amount) {
-  const { year, month, day } = dateParts(value);
-  const date = new Date(Date.UTC(year, month - 1, day + amount));
-  return isoDate(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+  return addDaysToIso(value, amount);
 }
 
 function daysInMonth(year, month) {
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return daysInIsoMonth(year, month);
 }
 
 function yearForMonth(reference, month) {

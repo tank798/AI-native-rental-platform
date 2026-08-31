@@ -1,3 +1,5 @@
+import { createClock } from "../clock.mjs";
+
 function bucketId(scope, key) {
   return `${scope}\u0000${key}`;
 }
@@ -7,7 +9,7 @@ function bucketId(scope, key) {
  * consumption. The interface is intentionally storage-agnostic so production
  * can replace the Map with a shared limiter without changing route policy.
  */
-export function createRateLimiter({ now = () => Date.now() } = {}) {
+export function createRateLimiter({ now = createClock().nowMs } = {}) {
   const buckets = new Map();
 
   function currentBucket(rule, at) {
@@ -49,4 +51,3 @@ export function createRateLimiter({ now = () => Date.now() } = {}) {
     }
   };
 }
-

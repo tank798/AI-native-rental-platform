@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { createRentalServer } from "../server.mjs";
+import { createClock } from "../src/clock.mjs";
 import { baseMandate, demoSupplyDraft } from "../src/fixtures.mjs";
 
 async function request(baseUrl, route, { cookie, method = "GET", body } = {}) {
@@ -35,7 +36,8 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zhunaer-api-"));
   const databasePath = path.join(tempDir, "rental.sqlite");
   const uploadRoot = path.join(tempDir, "uploads");
-  const app = createRentalServer({ databasePath, uploadRoot, enableScheduler: false });
+  const clock = createClock({ now: () => new Date("2026-08-29T16:00:00.000Z") });
+  const app = createRentalServer({ databasePath, uploadRoot, enableScheduler: false, clock });
   let address;
   try {
     address = await app.listen(0);
@@ -83,6 +85,7 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   });
   assert.equal(renterCreated.response.status, 201);
   assert.equal(renterCreated.payload.candidates.length, 0);
+  assert.equal(renterCreated.payload.task.expiresAt, "2026-09-28T16:00:00.000Z");
   const persistedMandate = app.repository.getTask(renterCreated.payload.task.id).payload.mandate;
   assert.equal(persistedMandate.maxCommuteMinutes, 25);
   assert.equal(persistedMandate.leaseMonths, 6);
@@ -104,6 +107,9 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
       }
     });
     assert.equal(uploaded.response.status, 201);
+    assert.equal(uploaded.payload.submissionStatus, "submitted");
+    assert.equal(uploaded.payload.verificationStatus, "not_reviewed");
+    assert.equal(uploaded.payload.displayLabel, "已上传，待审核");
     evidenceRefs[kind] = uploaded.payload.id;
   }
 
@@ -117,6 +123,33 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   draft.leaseMonthsMin = 6;
   draft.roommateCount = 0;
   draft.roommateGender = null;
+  const pendingSupply = await request(baseUrl, "/api/tasks", {
+    cookie: supplySession.cookie,
+    method: "POST",
+    body: { kind: "supply", payload: { draft, evidenceRefs, rawText: "临港新城房源" } }
+  });
+  assert.equal(pendingSupply.response.status, 422);
+  assert.match(pendingSupply.payload.error, /已上传，待审核/);
+
+  for (const evidenceId of Object.values(evidenceRefs)) {
+    const reviewed = app.verification.reviewEvidence({
+      evidenceId,
+      reviewer: "integration-test-reviewer",
+      method: "manual_review",
+      result: "approved"
+    });
+    assert.equal(reviewed.verificationStatus, "verified");
+    const publicStatus = await request(baseUrl, `/api/evidence/${encodeURIComponent(evidenceId)}`, { cookie: supplySession.cookie });
+    assert.equal(publicStatus.response.status, 200);
+    assert.equal(publicStatus.payload.source, "manual_review");
+  }
+  const hiddenFromOtherOwner = await request(
+    baseUrl,
+    `/api/evidence/${encodeURIComponent(evidenceRefs.identity)}`,
+    { cookie: renterSession.cookie }
+  );
+  assert.equal(hiddenFromOtherOwner.response.status, 404);
+
   const supplyCreated = await request(baseUrl, "/api/tasks", {
     cookie: supplySession.cookie,
     method: "POST",
@@ -184,7 +217,7 @@ test("出租任务必须使用当前会话真实上传的四类材料", async (t
     body: { kind: "supply", payload: { draft: demoSupplyDraft, evidenceRefs: {} } }
   });
   assert.equal(result.response.status, 422);
-  assert.match(result.payload.error, /身份核验未完成/);
+  assert.match(result.payload.error, /身份材料未上传/);
 
   const revoked = await request(baseUrl, "/api/session", { cookie: owner.cookie, method: "DELETE" });
   assert.equal(revoked.response.status, 200);

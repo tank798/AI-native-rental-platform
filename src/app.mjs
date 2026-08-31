@@ -3,6 +3,7 @@ import { parseDemandText, parsedDemandTags } from "./demand-parser.mjs";
 import { buildMandateFromConfirmedAnswers, seedAnswersFromParsed } from "./mandate-builder.mjs";
 import { applyFieldProposal, confirmField } from "./field-state.mjs";
 import { createEmptySupplyDraft, parseSupplyText } from "./supply-parser.mjs";
+import { createClock, dateAtShanghaiNoon, daysBetweenIsoDates } from "./clock.mjs";
 import {
   evaluateReport,
   matchMandate,
@@ -26,6 +27,7 @@ import {
 import {
   createServerTask,
   ensureServerSession,
+  getEvidenceStatus,
   getServerHealth,
   getServerTask,
   listServerTasks,
@@ -36,6 +38,7 @@ import {
 import { escapeAttribute, escapeText } from "./ui/safe-markup.mjs";
 
 const app = document.querySelector("#app");
+const clientClock = createClock();
 
 const iconPaths = {
   radar: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 4V2M20 12h2M12 20v2M4 12H2"/>',
@@ -85,19 +88,12 @@ function formatInteger(value) {
 }
 
 function todayInShanghai() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return clientClock.todayInShanghai();
 }
 
 function formatShortDate(isoDate) {
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", timeZone: "Asia/Shanghai" })
-    .format(new Date(`${isoDate}T12:00:00+08:00`));
+    .format(dateAtShanghaiNoon(isoDate));
 }
 
 function defaultAnswers() {
@@ -231,7 +227,7 @@ function restoreProductState() {
         ...fallback.supplyDraft,
         ...(saved.supplyDraft || {}),
         fees: { ...fallback.supplyDraft.fees, ...(saved.supplyDraft?.fees || {}) },
-        evidence: { ...fallback.supplyDraft.evidence, ...(saved.supplyDraft?.evidence || {}) },
+        verification: { ...fallback.supplyDraft.verification, ...(saved.supplyDraft?.verification || {}) },
         facilities: { ...fallback.supplyDraft.facilities, ...(saved.supplyDraft?.facilities || {}) }
       },
       stats: { ...fallback.stats, ...(saved.stats || {}) },
@@ -283,9 +279,7 @@ if (state.task?.remoteId && !state.task.delivered) {
 }
 
 function daysBetween(start, end) {
-  const startTime = new Date(`${start}T12:00:00+08:00`).getTime();
-  const endTime = new Date(`${end}T12:00:00+08:00`).getTime();
-  return Math.max(1, Math.floor((endTime - startTime) / 86_400_000) + 1);
+  return Math.max(1, daysBetweenIsoDates(start, end) + 1);
 }
 
 function visibleStats() {
@@ -563,14 +557,24 @@ function supplyChoice(key, value, label, activeValue) {
 }
 
 function evidenceUploadRow(kind, title, detail, accept = "image/*,application/pdf") {
-  const uploaded = Boolean(state.supplyEvidenceRefs[kind]);
+  const submitted = Boolean(state.supplyEvidenceRefs[kind]);
+  const verification = state.supplyDraft.verification?.[kind];
+  const verified = verification?.verificationStatus === "verified";
   const uploading = state.evidenceUploading === kind;
-  return `<div class="evidence-upload-row ${uploaded ? "is-complete" : ""}">
-    <span>${uploaded ? icon("check") : icon("shield")}</span>
-    <div><b>${title}</b><p>${uploaded ? "已私密上传" : detail}</p></div>
-    <button data-action="trigger-evidence" data-value="${kind}" ${uploading ? "disabled" : ""}>${uploading ? "上传中" : uploaded ? "更换" : "上传"}</button>
+  const statusLabel = verification?.displayLabel || (submitted ? "已上传，待审核" : detail);
+  return `<div class="evidence-upload-row ${verified ? "is-complete" : submitted ? "is-pending" : ""}">
+    <span>${verified ? icon("check") : icon("shield")}</span>
+    <div><b>${title}</b><p>${escapeHtml(statusLabel)}</p></div>
+    <button data-action="trigger-evidence" data-value="${kind}" ${uploading ? "disabled" : ""}>${uploading ? "上传中" : submitted ? "更换" : "上传"}</button>
     <input id="evidence-${kind}" hidden type="file" accept="${accept}" data-evidence-file="${kind}" />
   </div>`;
+}
+
+async function refreshSupplyVerificationStatuses() {
+  const entries = Object.entries(state.supplyEvidenceRefs);
+  if (!entries.length) return;
+  const statuses = await Promise.all(entries.map(async ([kind, evidenceId]) => [kind, await getEvidenceStatus(evidenceId)]));
+  state.supplyDraft.verification = Object.fromEntries(statuses);
 }
 
 function supplyInputScreen() {
@@ -1191,7 +1195,7 @@ async function initializeServerState() {
 
 function buildTask(kind, total, suitable, label) {
   return {
-    id: `${kind}-${Date.now()}`,
+    id: `${kind}-${crypto.randomUUID()}`,
     kind,
     label,
     phaseIndex: 0,
@@ -1339,10 +1343,10 @@ app.addEventListener("change", async (event) => {
     try {
       const uploaded = await uploadEvidenceFile(file, kind);
       state.supplyEvidenceRefs[kind] = uploaded.id;
-      state.supplyDraft.evidence[kind] = true;
-      confirmSupplyField(`evidence.${kind}`, uploaded.id);
+      state.supplyDraft.verification[kind] = uploaded;
+      confirmSupplyField(`verification.${kind}`, uploaded);
       state.evidenceUploading = null;
-      showToast("材料已私密上传");
+      showToast(uploaded.displayLabel || "已上传，待审核");
     } catch (error) {
       state.evidenceUploading = null;
       showToast(error.message || "材料上传失败");
@@ -1363,11 +1367,11 @@ app.addEventListener("change", async (event) => {
   try {
     const uploaded = await uploadEvidenceFile(files[0], "livePhotoChallenge");
     state.supplyEvidenceRefs.livePhotoChallenge = uploaded.id;
-    state.supplyDraft.evidence.livePhotoChallenge = true;
-    confirmSupplyField("evidence.livePhotoChallenge", uploaded.id);
+    state.supplyDraft.verification.livePhotoChallenge = uploaded;
+    confirmSupplyField("verification.livePhotoChallenge", uploaded);
     state.evidenceUploading = null;
     state.sheet = null;
-    showToast("现场照片已私密上传");
+    showToast(uploaded.displayLabel || "已上传，待审核");
   } catch (error) {
     state.evidenceUploading = null;
     state.photoPreviews = [];
@@ -1478,6 +1482,12 @@ app.addEventListener("click", async (event) => {
     case "scan-supply": {
       if (state.parsedSupply?.riskSignals.some((signal) => ["broker_role", "role_conflict", "prohibited_fee"].includes(signal))) {
         showToast("只接受房东本人或当前租客的零收费房源");
+        break;
+      }
+      try {
+        await refreshSupplyVerificationStatuses();
+      } catch (error) {
+        showToast(error.message || "核验状态刷新失败");
         break;
       }
       state.supplyValidation = validateSupplyDraft(state.supplyDraft);

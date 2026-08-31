@@ -1,12 +1,13 @@
 import {
-  SIMULATION_DATE,
   baseMandate,
   demoSupplyDraft,
   getListingsByIds,
   labScenarios,
   listings,
+  simulationClock,
   tenantCases
 } from "./fixtures.mjs";
+import { compareIsoDates, createClock } from "./clock.mjs";
 
 const ALLOWED_SUPPLY_ROLES = new Set(["landlord", "subletter"]);
 
@@ -32,10 +33,6 @@ const reasonLabels = {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
-}
-
-function compareDate(a, b) {
-  return new Date(`${a}T00:00:00+08:00`).getTime() - new Date(`${b}T00:00:00+08:00`).getTime();
 }
 
 function money(value) {
@@ -93,7 +90,7 @@ function hardConstraintAssessment(mandate, listing) {
 
   if (!locationMatches(mandate.locations, listing)) reasons.push("location");
   if (listing.commuteMinutes > mandate.maxCommuteMinutes) reasons.push("commute");
-  if (compareDate(listing.availableFrom, mandate.moveInWindow.to) > 0) reasons.push("move_in");
+  if (compareIsoDates(listing.availableFrom, mandate.moveInWindow.to) > 0) reasons.push("move_in");
   if (
     mandate.roommateGender &&
     listing.room?.roommateGender &&
@@ -121,7 +118,7 @@ function conditionalOfferIsUsable(mandate, offer) {
   const leaseOkay = !offer.conditions?.leaseMonthsMin || acceptedLeaseMonths >= offer.conditions.leaseMonthsMin;
   const dateOkay =
     !offer.conditions?.moveInOnOrBefore ||
-    compareDate(mandate.moveInWindow.from, offer.conditions.moveInOnOrBefore) <= 0;
+    compareIsoDates(mandate.moveInWindow.from, offer.conditions.moveInOnOrBefore) <= 0;
   return leaseOkay && dateOkay && offer.rent <= mandate.budget.hardMax;
 }
 
@@ -343,7 +340,7 @@ export function selectDiversifiedCandidates(eligible, limit = 3) {
 }
 
 export function matchMandate(mandate, candidateListings, options = {}) {
-  const startedAt = options.startedAt || `${SIMULATION_DATE}T10:20:00+08:00`;
+  const startedAt = options.startedAt || options.clock?.nowIso() || createClock().nowIso();
   const evaluated = candidateListings.map((listing) => evaluateListing(mandate, listing));
   const eligible = evaluated.filter((result) => result.status === "eligible");
   const quarantined = evaluated.filter((result) => result.status === "quarantine");
@@ -395,7 +392,7 @@ export function matchMandate(mandate, candidateListings, options = {}) {
   };
 }
 
-export function validateSupplyDraft(draft) {
+export function validateSupplyDraft(draft, { clock = createClock() } = {}) {
   const errors = [];
   const warnings = [];
 
@@ -405,7 +402,7 @@ export function validateSupplyDraft(draft) {
   if (!Number.isFinite(Number(draft.listedRent)) || Number(draft.listedRent) <= 0) errors.push("租金必须是有效金额");
   if (!Number.isFinite(Number(draft.minimumAuthorizedRent)) || Number(draft.minimumAuthorizedRent) <= 0 || Number(draft.minimumAuthorizedRent) > Number(draft.listedRent)) errors.push("最低授权租金不能高于挂牌价");
   if (!draft.availableFrom) errors.push("需要填写可入住日期");
-  else if (compareDate(draft.availableFrom, SIMULATION_DATE) < 0) errors.push("可入住日期不能早于今天");
+  else if (compareIsoDates(draft.availableFrom, clock.todayInShanghai()) < 0) errors.push("可入住日期不能早于今天");
   if (![3, 6, 12].includes(Number(draft.leaseMonthsMin))) errors.push("需要确认最短租期");
   if (!Number.isFinite(Number(draft.areaSqm)) || Number(draft.areaSqm) <= 0) errors.push("需要确认房间面积");
   if (!Number.isFinite(Number(draft.floor)) || !Number.isFinite(Number(draft.totalFloors)) || Number(draft.floor) <= 0 || Number(draft.floor) > Number(draft.totalFloors)) errors.push("需要确认正确楼层");
@@ -414,10 +411,19 @@ export function validateSupplyDraft(draft) {
   if (prohibitedFeeKeys.some((key) => Number(draft.fees?.[key] || 0) > 0)) {
     errors.push("不得收取中介费、服务费、信息费或带看费");
   }
-  if (!draft.evidence?.identity) errors.push("身份核验未完成");
-  if (!draft.evidence?.roleDocument) errors.push("发布角色材料未完成");
-  if (!draft.evidence?.rightsDocument) errors.push("产权或在租合同材料未完成");
-  if (!draft.evidence?.livePhotoChallenge) errors.push("房屋现场随机拍摄未完成");
+  const verificationLabels = {
+    identity: "身份材料",
+    roleDocument: "发布角色材料",
+    rightsDocument: "产权或在租合同材料",
+    livePhotoChallenge: "房屋现场材料"
+  };
+  Object.entries(verificationLabels).forEach(([kind, label]) => {
+    const fact = draft.verification?.[kind];
+    if (fact?.verificationStatus === "verified") return;
+    if (fact?.verificationStatus === "rejected") errors.push(`${label}审核未通过`);
+    else if (fact?.submissionStatus === "submitted") errors.push(`${label}已上传，待审核`);
+    else errors.push(`${label}未上传`);
+  });
   if (!draft.facilities?.washer) warnings.push("洗衣机信息缺失会降低匹配质量");
   if (!draft.facilities?.kitchen) warnings.push("厨房信息缺失会降低匹配质量");
 
@@ -425,7 +431,7 @@ export function validateSupplyDraft(draft) {
     valid: errors.length === 0,
     errors,
     warnings,
-    badge: errors.length === 0 ? "四项核验完成" : "暂不可发布"
+    badge: errors.length === 0 ? "四项人工核验完成" : "暂不可发布"
   };
 }
 
@@ -494,10 +500,10 @@ export function listingFromSupplyDraft(draft, mandate, index) {
       networkMonthly: monthlyFee("network")
     },
     verification: {
-      identity: draft.evidence?.identity ? "verified" : "missing",
-      role: draft.evidence?.roleDocument ? "verified" : "missing",
-      rights: draft.evidence?.rightsDocument ? "verified" : "missing",
-      liveSite: draft.evidence?.livePhotoChallenge ? "verified" : "unverified"
+      identity: draft.verification?.identity?.verificationStatus === "verified" ? "verified" : "not_reviewed",
+      role: draft.verification?.roleDocument?.verificationStatus === "verified" ? "verified" : "not_reviewed",
+      rights: draft.verification?.rightsDocument?.verificationStatus === "verified" ? "verified" : "not_reviewed",
+      liveSite: draft.verification?.livePhotoChallenge?.verificationStatus === "verified" ? "verified" : "not_reviewed"
     },
     lastVerifiedDays: 0,
     freshness: "live",
@@ -506,8 +512,8 @@ export function listingFromSupplyDraft(draft, mandate, index) {
   };
 }
 
-export function matchSupplyDraft(draft, cases = tenantCases) {
-  const validation = validateSupplyDraft(draft);
+export function matchSupplyDraft(draft, cases = tenantCases, options = {}) {
+  const validation = validateSupplyDraft(draft, { clock: options.clock });
   if (!validation.valid) {
     return { scanned: 0, eligibleCount: 0, candidates: [], excluded: [], audit: [], validation };
   }
@@ -580,7 +586,7 @@ function auditContainsPrivateCeiling(result, mandate) {
 
 export function runRegressionSuite() {
   const byId = (id) => listings.find((listing) => listing.id === id);
-  const full = matchMandate(baseMandate, listings);
+  const full = matchMandate(baseMandate, listings, { clock: simulationClock });
   const conditional = evaluateListing(baseMandate, byId("home-nanyang"));
   const broker = evaluateListing(baseMandate, byId("home-broker-trap"));
   const stale = evaluateListing(baseMandate, byId("home-stale"));
@@ -592,7 +598,7 @@ export function runRegressionSuite() {
   const badSupply = validateSupplyDraft({
     ...demoSupplyDraft,
     fees: { ...demoSupplyDraft.fees, service: 500 }
-  });
+  }, { clock: simulationClock });
 
   const cases = [
     ["房东直租可进入候选", full.eligible.some((item) => item.listing.role === "landlord")],
@@ -617,6 +623,6 @@ export function runLabScenario(scenarioId, mandate = baseMandate) {
   const scenario = labScenarios.find((item) => item.id === scenarioId) || labScenarios[0];
   return {
     scenario,
-    result: matchMandate(mandate, getListingsByIds(scenario.listingIds))
+    result: matchMandate(mandate, getListingsByIds(scenario.listingIds), { clock: simulationClock })
   };
 }

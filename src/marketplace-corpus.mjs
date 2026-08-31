@@ -237,7 +237,18 @@ function buildLandlordCase(index) {
       roommateGender,
       roommateCount,
       fees: { rent: listedRent, deposit: listedRent, utilities: "民水民电", network: listing.fees.networkMonthly, property: listing.fees.propertyMonthly, service: listing.fees.service, intermediary: 0 },
-      evidence: { identity: true, roleDocument: risk !== "broker", rightsDocument: risk !== "rights_missing", livePhotoChallenge: !["stale", "duplicate_photo"].includes(risk) },
+      verification: Object.fromEntries([
+        ["identity", true],
+        ["roleDocument", risk !== "broker"],
+        ["rightsDocument", risk !== "rights_missing"],
+        ["livePhotoChallenge", !["stale", "duplicate_photo"].includes(risk)]
+      ].map(([kind, verified]) => [kind, {
+        submissionStatus: "submitted",
+        verificationStatus: verified ? "verified" : "rejected",
+        source: "fixture",
+        reviewedAt: "2026-08-30T02:00:00.000Z",
+        displayLabel: verified ? "评测夹具：已核验" : "评测夹具：未通过"
+      }])),
       facilities: { kitchen: facilities.kitchen, washer: facilities.washer, elevator: facilities.elevator, ensuite: facilities.ensuite, exposure: facilities.exposure }
     }
   };

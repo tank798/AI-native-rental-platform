@@ -1,5 +1,11 @@
 export const SIMULATION_DATE = "2026-08-23";
 
+/** Fixed only for deterministic demos and evals; production code injects its real clock. */
+export const simulationClock = {
+  nowIso: () => `${SIMULATION_DATE}T04:00:00.000Z`,
+  todayInShanghai: () => SIMULATION_DATE
+};
+
 export const baseMandate = {
   id: "mandate-renter-001",
   intent: "rent",
@@ -372,7 +378,7 @@ export const demoSupplyDraft = {
   title: "静安寺 8 分钟，朝南次卧个人转租",
   listedRent: 3200,
   minimumAuthorizedRent: 3000,
-  availableFrom: "2026-08-29",
+  availableFrom: "2026-09-03",
   leaseEnd: "2027-08-31",
   leaseMonthsMin: 12,
   areaSqm: 15,
@@ -390,11 +396,11 @@ export const demoSupplyDraft = {
     service: 0,
     intermediary: 0
   },
-  evidence: {
-    identity: true,
-    roleDocument: true,
-    rightsDocument: true,
-    livePhotoChallenge: true
+  verification: {
+    identity: { submissionStatus: "submitted", verificationStatus: "verified", source: "fixture", reviewedAt: "2026-08-30T02:00:00.000Z", displayLabel: "评测夹具：已核验" },
+    roleDocument: { submissionStatus: "submitted", verificationStatus: "verified", source: "fixture", reviewedAt: "2026-08-30T02:00:00.000Z", displayLabel: "评测夹具：已核验" },
+    rightsDocument: { submissionStatus: "submitted", verificationStatus: "verified", source: "fixture", reviewedAt: "2026-08-30T02:00:00.000Z", displayLabel: "评测夹具：已核验" },
+    livePhotoChallenge: { submissionStatus: "submitted", verificationStatus: "verified", source: "fixture", reviewedAt: "2026-08-30T02:00:00.000Z", displayLabel: "评测夹具：已核验" }
   },
   facilities: {
     kitchen: true,
