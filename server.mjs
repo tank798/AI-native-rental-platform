@@ -13,6 +13,7 @@ import { openRentalDatabase } from "./src/server/database.mjs";
 import { createIntakeService } from "./src/server/intake-service.mjs";
 import { createMatchingService } from "./src/server/matching-service.mjs";
 import { createRateLimiter } from "./src/server/rate-limit.mjs";
+import { parseContactEncryptionKey } from "./src/server/contact-service.mjs";
 import { assertSameOrigin, httpError, readJson } from "./src/server/request-guards.mjs";
 import { normalizeMarketMode, readRuntimeConfig } from "./src/server/runtime-config.mjs";
 import { parseIntakeRequest, parseTaskCreateRequest } from "./src/server/schemas.mjs";
@@ -190,7 +191,7 @@ function publicMatchCase(matching, matchCase, ownerId) {
       publicTerms: matchCase.terms.publicTerms,
       nonBlockingUnknowns: matchCase.terms.nonBlockingUnknowns
     } : null,
-    contactUnlocked: false,
+    contactUnlocked: matching.contactGrants.isUnlocked(matchCase.id, ownerId),
     requiresReconfirmation: Boolean(previousConfirmation),
     termsChangeSummary: previousConfirmation
       ? publicTermsChanges(previousTerms?.publicTerms, matchCase.terms?.publicTerms)
@@ -252,6 +253,7 @@ export function createRentalServer(options = {}) {
   const aiApiKey = options.aiApiKey ?? environment.SILICONFLOW_API_KEY ?? null;
   const aiKeyFile = options.aiKeyFile ?? environment.SILICONFLOW_API_KEY_FILE ?? null;
   const aiModel = options.aiModel ?? environment.SILICONFLOW_MODEL ?? undefined;
+  const contactEncryptionKey = options.contactEncryptionKey ?? environment.CONTACT_ENCRYPTION_KEY ?? null;
   const enableScheduler = options.enableScheduler ?? true;
   const schedulerMs = options.schedulerMs ?? 10_000;
   const marketMode = normalizeMarketMode(options.marketMode ?? runtimeConfig.marketMode);
@@ -259,11 +261,18 @@ export function createRentalServer(options = {}) {
   const rateLimitPolicy = rateLimitPolicyFrom(environment, options.rateLimitPolicy);
   const clock = options.clock || createClock();
 
+  if (marketMode === "real") parseContactEncryptionKey(contactEncryptionKey);
+
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   fs.mkdirSync(uploadRoot, { recursive: true });
   const repository = openRentalDatabase(databasePath, { clock });
   const verification = createVerificationService({ repository, clock });
-  const matching = createMatchingService(repository, { marketMode, clock });
+  const matching = createMatchingService(repository, {
+    marketMode,
+    clock,
+    contactEncryptionKey,
+    onContactSecurityError: options.onContactSecurityError
+  });
   const sessions = createSessionService({ repository, secureCookies, now: clock.now });
   const rateLimiter = options.rateLimiter || createRateLimiter({ now: clock.nowMs });
   const intake = createIntakeService({
@@ -477,6 +486,18 @@ export function createRentalServer(options = {}) {
       return json(response, 200, { tasks });
     }
 
+    if (url.pathname === "/api/profile/contact") {
+      if (request.method === "GET") {
+        return json(response, 200, { contact: matching.contacts.getMasked(session.id) });
+      }
+      if (request.method === "PUT") {
+        assertSameOrigin(request);
+        enforceWriteLimit(request, session);
+        const body = await readJson(request);
+        return json(response, 200, { contact: matching.contacts.set(session.id, body) });
+      }
+    }
+
     const taskMatchesRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/matches$/);
     if (request.method === "GET" && taskMatchesRoute) {
       const taskId = decodeURIComponent(taskMatchesRoute[1]);
@@ -506,6 +527,12 @@ export function createRentalServer(options = {}) {
         matchCase: publicMatchCase(matching, decision.matchCase, session.id),
         idempotent: decision.idempotent
       });
+    }
+
+    const matchContactRoute = url.pathname.match(/^\/api\/matches\/([^/]+)\/contact$/);
+    if (request.method === "GET" && matchContactRoute) {
+      const result = matching.contactGrants.getForOwner(decodeURIComponent(matchContactRoute[1]), session.id);
+      return json(response, 200, result);
     }
 
     const clarificationAnswerMatch = url.pathname.match(/^\/api\/matches\/([^/]+)\/clarifications\/([^/]+)\/answers$/);

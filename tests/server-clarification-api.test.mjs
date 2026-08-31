@@ -7,6 +7,7 @@ import test from "node:test";
 import { createRentalServer } from "../server.mjs";
 import { createClock } from "../src/clock.mjs";
 import { baseMandate, demoSupplyDraft } from "../src/fixtures.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
 
 async function request(baseUrl, route, { cookie, method = "GET", body } = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -32,7 +33,8 @@ test("案例接口只给目标方问题，回答后自动重算且重复回答�
     databasePath: path.join(tempDir, "rental.sqlite"),
     uploadRoot: path.join(tempDir, "uploads"),
     enableScheduler: false,
-    clock
+    clock,
+    contactEncryptionKey: testContactEncryptionKey()
   });
   let address;
   try {

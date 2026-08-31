@@ -147,6 +147,11 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     reactivateTerms: db.prepare("UPDATE match_terms SET invalidated_at = NULL WHERE match_case_id = ? AND version = ?"),
     invalidateOtherTerms: db.prepare("UPDATE match_terms SET invalidated_at = ? WHERE match_case_id = ? AND version <> ? AND invalidated_at IS NULL"),
     revokeConfirmations: db.prepare("UPDATE party_confirmations SET revoked_at = ? WHERE match_case_id = ? AND revoked_at IS NULL"),
+    activeContactGrant: db.prepare("SELECT id, terms_version FROM contact_grants WHERE match_case_id = ? AND revoked_at IS NULL LIMIT 1"),
+    revokeContactGrants: db.prepare(`
+      UPDATE contact_grants SET revoked_at = ?, revoke_reason = ?
+      WHERE match_case_id = ? AND revoked_at IS NULL
+    `),
     confirmations: db.prepare("SELECT * FROM party_confirmations WHERE match_case_id = ? ORDER BY terms_version ASC, party ASC"),
     confirmationByParty: db.prepare("SELECT * FROM party_confirmations WHERE match_case_id = ? AND party = ? AND revoked_at IS NULL"),
     insertConfirmation: db.prepare(`
@@ -225,6 +230,21 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     return matchCase ? { ...matchCase, terms: termsFor(row) } : null;
   }
 
+  function revokeActiveContactGrants(caseId, reason, at) {
+    const active = statements.activeContactGrant.get(caseId);
+    if (!active) return false;
+    const changed = statements.revokeContactGrants.run(at, reason, caseId).changes > 0;
+    if (changed) {
+      statements.insertEvent.run(
+        caseId,
+        "contact.revoked",
+        stableJson({ grantId: active.id, reason, termsVersion: Number(active.terms_version) }),
+        at
+      );
+    }
+    return changed;
+  }
+
   function upsertEvaluation({ renterTask, supplyTask, evaluation, expiresAt }) {
     if (evaluation.status === "hard_conflict") return null;
     assertPair(renterTask.id, supplyTask.id);
@@ -293,7 +313,10 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
         || Number(existing.renter_input_version) !== evaluation.renterInputVersion
         || Number(existing.supply_input_version) !== evaluation.supplyInputVersion
       );
-      if (confirmationInputsChanged) statements.revokeConfirmations.run(at, existing.id);
+      if (confirmationInputsChanged) {
+        statements.revokeConfirmations.run(at, existing.id);
+        revokeActiveContactGrants(existing.id, "terms_or_input_changed", at);
+      }
       statements.update.run(
         status,
         evaluation.renterInputVersion,
@@ -314,7 +337,10 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
       const before = statements.byId.get(caseId);
       if (!before) return null;
       const changed = statements.invalidate.run(status, reason, at, caseId).changes > 0;
-      if (changed) statements.revokeConfirmations.run(at, caseId);
+      if (changed) {
+        statements.revokeConfirmations.run(at, caseId);
+        revokeActiveContactGrants(caseId, reason, at);
+      }
       if (changed && before.status !== status) statements.insertEvent.run(caseId, `case_${status}`, stableJson({ reason }), at);
       return hydrate(statements.byId.get(caseId));
     });
@@ -437,6 +463,9 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     },
     revokeConfirmations(caseId, at = clock.nowIso()) {
       return statements.revokeConfirmations.run(at, caseId).changes;
+    },
+    revokeContactGrants(caseId, reason = "manual", at = clock.nowIso()) {
+      return revokeActiveContactGrants(caseId, reason, at);
     },
     get: (id) => hydrate(statements.byId.get(id)),
     getForOwner: (id, ownerId) => hydrate(statements.forOwner.get(id, ownerId, ownerId)),

@@ -7,6 +7,7 @@ import test from "node:test";
 import { createRentalServer } from "../server.mjs";
 import { createClock } from "../src/clock.mjs";
 import { baseMandate, demoSupplyDraft } from "../src/fixtures.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
 
 async function request(baseUrl, route, { cookie, method = "GET", body } = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -29,7 +30,8 @@ test("任务案例 API 恢复服务端确认状态，第三方不可见且双方
     databasePath: path.join(tempDir, "rental.sqlite"),
     uploadRoot: path.join(tempDir, "uploads"),
     enableScheduler: false,
-    clock
+    clock,
+    contactEncryptionKey: testContactEncryptionKey()
   });
   let address;
   try {
@@ -89,6 +91,32 @@ test("任务案例 API 恢复服务端确认状态，第三方不可见且双方
   });
   assert.equal(stale.response.status, 409);
 
+  const missingContact = await request(baseUrl, `${route}/confirm`, {
+    cookie: renter.cookie,
+    method: "POST",
+    body: { termsVersion: terms.version, termsHash: terms.hash }
+  });
+  assert.equal(missingContact.response.status, 422);
+  assert.equal(missingContact.payload.code, "CONTACT_REQUIRED");
+
+  const renterContactValue = "renter_api_2026";
+  const supplyContactValue = "+8613800138000";
+  const renterContact = await request(baseUrl, "/api/profile/contact", {
+    cookie: renter.cookie,
+    method: "PUT",
+    body: { type: "wechat", value: renterContactValue }
+  });
+  const supplyContact = await request(baseUrl, "/api/profile/contact", {
+    cookie: supply.cookie,
+    method: "PUT",
+    body: { type: "phone", value: supplyContactValue }
+  });
+  assert.equal(renterContact.response.status, 200);
+  assert.equal(supplyContact.response.status, 200);
+  assert.equal(renterContact.payload.contact.value, undefined);
+  assert.equal(supplyContact.payload.contact.maskedValue, "+86138****8000");
+  assert.doesNotMatch(JSON.stringify({ renterContact: renterContact.payload, supplyContact: supplyContact.payload }), /renter_api_2026|13800138000/u);
+
   const renterConfirmed = await request(baseUrl, `${route}/confirm`, {
     cookie: renter.cookie,
     method: "POST",
@@ -98,6 +126,12 @@ test("任务案例 API 恢复服务端确认状态，第三方不可见且双方
   assert.equal(renterConfirmed.payload.matchCase.status, "awaiting_confirmations");
   assert.equal(renterConfirmed.payload.matchCase.myDecision, "confirmed");
   assert.equal(renterConfirmed.payload.matchCase.otherDecision, "pending");
+  assert.equal(renterConfirmed.payload.matchCase.contactUnlocked, false);
+  const renterLocked = await request(baseUrl, `${route}/contact`, { cookie: renter.cookie });
+  const supplyLocked = await request(baseUrl, `${route}/contact`, { cookie: supply.cookie });
+  assert.equal(renterLocked.response.status, 403);
+  assert.equal(supplyLocked.response.status, 403);
+  assert.equal(renterLocked.payload.code, "CONTACT_LOCKED");
 
   const supplyView = await request(baseUrl, route, { cookie: supply.cookie });
   assert.equal(supplyView.payload.matchCase.myDecision, "pending");
@@ -110,6 +144,15 @@ test("任务案例 API 恢复服务端确认状态，第三方不可见且双方
   assert.equal(supplyConfirmed.payload.matchCase.status, "mutually_confirmed");
   assert.equal(supplyConfirmed.payload.matchCase.myDecision, "confirmed");
   assert.equal(supplyConfirmed.payload.matchCase.otherDecision, "confirmed");
+  assert.equal(supplyConfirmed.payload.matchCase.contactUnlocked, true);
+
+  const renterReveal = await request(baseUrl, `${route}/contact`, { cookie: renter.cookie });
+  const supplyReveal = await request(baseUrl, `${route}/contact`, { cookie: supply.cookie });
+  assert.deepEqual(renterReveal.payload.contact, { type: "phone", value: supplyContactValue });
+  assert.deepEqual(supplyReveal.payload.contact, { type: "wechat", value: renterContactValue });
+  assert.equal((await request(baseUrl, `${route}/contact`, { cookie: stranger.cookie })).response.status, 404);
+  assert.equal(app.repository.raw.prepare("SELECT COUNT(*) AS count FROM contact_grants WHERE match_case_id = ?").get(created.id).count, 1);
+  assert.doesNotMatch(JSON.stringify(app.matching.matchCaseRepository.listEvents(created.id)), /renter_api_2026|13800138000/u);
 
   const replay = await request(baseUrl, `${route}/confirm`, {
     cookie: supply.cookie,

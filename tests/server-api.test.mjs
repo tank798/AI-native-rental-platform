@@ -7,6 +7,7 @@ import path from "node:path";
 import { createRentalServer } from "../server.mjs";
 import { createClock } from "../src/clock.mjs";
 import { baseMandate, demoSupplyDraft } from "../src/fixtures.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
 
 async function request(baseUrl, route, { cookie, method = "GET", body } = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -37,7 +38,7 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   const databasePath = path.join(tempDir, "rental.sqlite");
   const uploadRoot = path.join(tempDir, "uploads");
   const clock = createClock({ now: () => new Date("2026-08-29T16:00:00.000Z") });
-  const app = createRentalServer({ databasePath, uploadRoot, enableScheduler: false, clock });
+  const app = createRentalServer({ databasePath, uploadRoot, enableScheduler: false, clock, contactEncryptionKey: testContactEncryptionKey() });
   let address;
   try {
     address = await app.listen(0);
@@ -193,7 +194,8 @@ test("出租任务必须使用当前会话真实上传的四类材料", async (t
   const app = createRentalServer({
     databasePath: path.join(tempDir, "rental.sqlite"),
     uploadRoot: path.join(tempDir, "uploads"),
-    enableScheduler: false
+    enableScheduler: false,
+    contactEncryptionKey: testContactEncryptionKey()
   });
   let address;
   try {

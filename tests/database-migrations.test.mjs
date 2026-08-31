@@ -87,8 +87,8 @@ function createLegacyFixture(filename) {
 }
 
 test("迁移列表版本连续且 SQL 文件全部入库", () => {
-  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3, 4, 5]);
-  assert.equal(latestSchemaVersion, 5);
+  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3, 4, 5, 6]);
+  assert.equal(latestSchemaVersion, 6);
   migrations.forEach((migration) => assert.equal(fs.statSync(migrationSqlPath(migration)).isFile(), true));
 });
 
@@ -195,6 +195,21 @@ test("双边案例、open 澄清、确认和 outbox 去重均由数据库约束"
   `);
   insertConfirmation.run("confirmation-1", at);
   assert.throws(() => insertConfirmation.run("confirmation-2", at), /UNIQUE/);
+
+  repository.raw.prepare(`
+    INSERT INTO match_terms(match_case_id, version, terms_hash, public_terms_json, blocking_unknowns_json,
+                            non_blocking_unknowns_json, created_at)
+    VALUES ('case-1', 1, 'hash-1', '{}', '[]', '[]', ?)
+  `).run(at);
+  const insertGrant = repository.raw.prepare(`
+    INSERT INTO contact_grants(id, match_case_id, terms_version, terms_hash, renter_input_version,
+                               supply_input_version, renter_owner_id, supply_owner_id, granted_at, expires_at)
+    VALUES (?, 'case-1', 1, 'hash-1', 1, 1, 'owner-r', 'owner-s', ?, '2026-09-30T00:00:00.000Z')
+  `);
+  insertGrant.run("grant-1", at);
+  assert.throws(() => insertGrant.run("grant-2", at), /UNIQUE/);
+  repository.raw.prepare("UPDATE contact_grants SET revoked_at = ?, revoke_reason = 'test' WHERE id = 'grant-1'").run(at);
+  insertGrant.run("grant-2", at);
 
   const insertOutbox = repository.raw.prepare(`
     INSERT INTO outbox_events(id, aggregate_type, aggregate_id, event_type, payload_json, dedupe_key, status, available_at, created_at)

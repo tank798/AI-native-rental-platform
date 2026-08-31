@@ -11,6 +11,7 @@ import { openRentalDatabase } from "../src/server/database.mjs";
 import { createMatchCaseRepository } from "../src/server/match-case-repository.mjs";
 import { createMatchingService } from "../src/server/matching-service.mjs";
 import { createTaskRepository } from "../src/server/task-repository.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
 
 const expiresAt = "2026-09-29T00:00:00.000Z";
 
@@ -34,7 +35,7 @@ async function fixture(t, prefix = "zhunaer-clarification-") {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const clock = createClock({ now: () => new Date("2026-08-30T00:00:00.000Z") });
   const database = openRentalDatabase(path.join(tempDir, "rental.sqlite"), { clock });
-  const matching = createMatchingService(database, { clock, marketMode: "real" });
+  const matching = createMatchingService(database, { clock, marketMode: "real", contactEncryptionKey: testContactEncryptionKey() });
   t.after(async () => {
     database.close();
     await fs.rm(tempDir, { recursive: true, force: true });

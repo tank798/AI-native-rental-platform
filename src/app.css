@@ -2781,6 +2781,43 @@ button {
   font-weight: 700;
 }
 
+.contact-settings-sheet > p {
+  margin: -2px 0 16px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.contact-settings-sheet label {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 13px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.contact-settings-sheet select,
+.contact-settings-sheet input {
+  width: 100%;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+}
+
+.contact-settings-sheet small {
+  display: block;
+  margin: -2px 0 14px;
+  color: #728aa5;
+  font-size: 12px;
+}
+
 .fit-card,
 .notice-card,
 .source-card,

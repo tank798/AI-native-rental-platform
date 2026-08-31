@@ -7,11 +7,12 @@ import path from "node:path";
 import { baseMandate, demoSupplyDraft } from "../src/fixtures.mjs";
 import { openRentalDatabase } from "../src/server/database.mjs";
 import { createMatchingService } from "../src/server/matching-service.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
 
 async function createMatchingFixture(t, prefix, options = {}) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const repository = openRentalDatabase(path.join(tempDir, "rental.sqlite"));
-  const matching = createMatchingService(repository, options);
+  const matching = createMatchingService(repository, { contactEncryptionKey: testContactEncryptionKey(), ...options });
   t.after(async () => {
     repository.close();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -58,7 +59,7 @@ test("显式演示模式会注入语料并把每个候选标记为 fixture", asy
 test("持续匹配会把新房源增量推送到租客，也把新租客推送到房东", async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zhunaer-matching-"));
   const repository = openRentalDatabase(path.join(tempDir, "rental.sqlite"));
-  const matching = createMatchingService(repository);
+  const matching = createMatchingService(repository, { contactEncryptionKey: testContactEncryptionKey() });
   t.after(async () => {
     repository.close();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -129,7 +130,7 @@ test("持续匹配会把新房源增量推送到租客，也把新租客推送�
 test("持续扫描会先停止已经过期的任务", async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zhunaer-expiry-"));
   const repository = openRentalDatabase(path.join(tempDir, "rental.sqlite"));
-  const matching = createMatchingService(repository);
+  const matching = createMatchingService(repository, { contactEncryptionKey: testContactEncryptionKey() });
   t.after(async () => {
     repository.close();
     await fs.rm(tempDir, { recursive: true, force: true });

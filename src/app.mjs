@@ -31,12 +31,15 @@ import {
   declineMatchCase,
   ensureServerSession,
   getEvidenceStatus,
+  getMatchContact,
   getMatchCase,
+  getProfileContact,
   getServerHealth,
   getServerTask,
   listServerTasks,
   parseRenterWithServer,
   parseSupplyWithServer,
+  setProfileContact,
   uploadEvidenceFile
 } from "./api-client.mjs";
 import { escapeAttribute, escapeText } from "./ui/safe-markup.mjs";
@@ -201,6 +204,10 @@ function initialProductState() {
     activeMatchCaseLoading: false,
     activeMatchCaseError: null,
     clarificationSubmitting: null,
+    contactProfile: null,
+    revealedContact: null,
+    contactLoading: false,
+    contactSubmitting: false,
     reportType: "broker_or_fee",
     reportHasEvidence: false,
     reportResult: null,
@@ -228,6 +235,9 @@ function restoreProductState() {
       page: "root",
       sheet: null,
       listening: false,
+      revealedContact: null,
+      contactLoading: false,
+      contactSubmitting: false,
       photoPreviews: fallback.photoPreviews,
       answers: { ...fallback.answers, ...(saved.answers || {}) },
       supplyDraft: {
@@ -259,6 +269,9 @@ function persistProductState() {
       sheet: null,
       listening: false,
       toast: null,
+      revealedContact: undefined,
+      contactLoading: false,
+      contactSubmitting: false,
       photoPreviews: undefined,
       result: compactResult(state.result),
       supplyResult: compactResult(state.supplyResult)
@@ -835,9 +848,12 @@ function settingsToggle(key, title, detail) {
 }
 
 function settingsScreen() {
+  const contactSummary = state.contactProfile
+    ? `${({ phone: "手机", wechat: "微信", email: "邮箱" })[state.contactProfile.type] || "联系方式"} · ${state.contactProfile.maskedValue}`
+    : "未设置，确认条款前必须补充";
   return `<section class="settings-screen"><div class="subpage-nav settings-nav"><button data-action="back-profile" aria-label="返回我的">${icon("back")}</button><h1>设置</h1><span></span></div>
     <section class="settings-group"><h2>匹配与通知</h2>${settingsToggle("expiryReminder", "到期提醒", "任务到期前 5 天提醒续期")}${settingsToggle("candidateNotifications", "新候选通知", "出现新的合适房源或租客时通知")}${settingsToggle("privateNegotiation", "私密议价", "预算上限与出租底价仅由分身使用")}</section>
-    <section class="settings-group"><h2>账户与数据</h2><button class="settings-link" data-action="setting-info" data-value="city"><span><b>匹配城市</b><em>上海</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="retention"><span><b>任务有效期</b><em>30 天，过期自动停止匹配</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="privacy"><span><b>隐私与数据</b><em>每位用户的数据独立保存</em></span>${icon("arrow")}</button></section>
+    <section class="settings-group"><h2>账户与数据</h2><button class="settings-link" data-action="open-contact-settings"><span><b>接收看房的联系方式</b><em>${escapeText(contactSummary)}</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="city"><span><b>匹配城市</b><em>上海</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="retention"><span><b>任务有效期</b><em>30 天，过期自动停止匹配</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="privacy"><span><b>隐私与数据</b><em>每位用户的数据独立保存</em></span>${icon("arrow")}</button></section>
     <section class="settings-group"><h2>关于</h2><button class="settings-link" data-action="setting-info" data-value="about"><span><b>住哪儿</b><em>体验版 0.7 · 100×100 真实测试市场</em></span>${icon("arrow")}</button></section>
   </section>`;
 }
@@ -939,7 +955,16 @@ function matchDecisionActions(candidate) {
   if (!matchCase || state.activeMatchCaseLoading) return `<button class="primary-button" disabled>正在读取确认状态</button>`;
   if (matchCase.status === "clarifying") return `<button class="primary-button" disabled>先完成匹配信息核对</button>`;
   if (["declined", "invalidated", "expired", "closed"].includes(matchCase.status)) return `<button class="primary-button" disabled>匹配已失效</button>`;
-  if (matchCase.status === "mutually_confirmed") return `<button class="primary-button" disabled>双方已确认</button>`;
+  if (matchCase.status === "mutually_confirmed") {
+    if (state.revealedContact) {
+      const typeLabel = ({ phone: "手机号", wechat: "微信号", email: "邮箱" })[state.revealedContact.type] || "联系方式";
+      return `<section class="contact-card" aria-live="polite"><span>${typeLabel} · 仅本页临时显示</span><b>${escapeText(state.revealedContact.value)}</b><button data-action="hide-contact">隐藏</button></section>`;
+    }
+    if (matchCase.contactUnlocked) {
+      return `<button class="primary-button" data-action="reveal-contact" ${state.contactLoading ? "disabled" : ""}>${state.contactLoading ? "正在安全读取…" : "点击查看对方联系方式"}</button>`;
+    }
+    return `<button class="primary-button" data-action="confirm-match">重新确认并开放联系方式</button>`;
+  }
   if (matchCase.myDecision === "confirmed") return `<button class="primary-button" disabled>你已确认，等待对方</button><button class="report-link" data-action="decline-match">撤回并拒绝当前条款</button>`;
   return `<button class="primary-button" data-action="confirm-match">确认条款 v${escapeText(matchCase.currentTerms?.version)}</button><button class="report-link" data-action="decline-match">拒绝当前条款</button>`;
 }
@@ -992,6 +1017,7 @@ async function loadActiveMatchCase() {
   const candidate = activeCandidate();
   const requestedId = candidate?.matchCaseId || null;
   state.activeMatchCase = null;
+  state.revealedContact = null;
   state.activeMatchCaseError = null;
   state.activeMatchCaseLoading = Boolean(requestedId);
   render();
@@ -1037,6 +1063,14 @@ async function submitClarification(clarificationId, answer) {
   }
 }
 
+function detailContactAction(realCase) {
+  if (!realCase) return `<button disabled>${icon("contact")}<span>演示不开放</span></button>`;
+  if (state.activeMatchCase?.contactUnlocked) {
+    return `<button data-action="reveal-contact" ${state.contactLoading ? "disabled" : ""}>${icon("contact")}<span>${state.revealedContact ? "已临时显示" : state.contactLoading ? "安全读取中" : "查看联系方式"}</span></button>`;
+  }
+  return `<button disabled>${icon("contact")}<span>确认后开放</span></button>`;
+}
+
 function candidateDetail() {
   const candidate = activeCandidate();
   if (!candidate) return resultsScreen();
@@ -1049,7 +1083,7 @@ function candidateDetail() {
     <div class="detail-sheet">
       <div class="detail-title"><div><h1>${escapeText(listing.shortTitle)}</h1><p>${escapeText(listing.station)} · 步行${minuteLabel(listing.walkMinutes)}</p></div><b>¥${formatInteger(candidate.agreedRent)}<small>/月</small></b></div>
       <div class="detail-facts"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.floor)}/${escapeText(listing.room.totalFloors)} 层</span><span>${escapeText(listing.room.roommateCount)} 位室友</span></div>
-      <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button><button disabled>${icon("contact")}<span>${realCase ? "确认后开放" : "演示不开放"}</span></button></div>
+      <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button>${detailContactAction(realCase)}</div>
       <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
       <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需本人现场确认</p>"}</section>
       <section class="source-card"><h2>资料来源</h2>${candidate.provenance.map((item) => `<div><span>${escapeText(item.label)}</span><b>${escapeText(item.value)}</b><em>${escapeText(item.source)}</em></div>`).join("")}</section>
@@ -1112,7 +1146,7 @@ function photoSheet() {
 function shareSheet() {
   const candidate = activeCandidate();
   if (!candidate) return "";
-  const contactAction = `<button class="source-option" disabled>${icon("contact")}<span>${candidate.matchCaseId ? "双方确认后开放联系方式" : "演示候选不开放联系方式"}</span>${icon("lock")}</button>`;
+  const contactAction = `<button class="source-option" disabled>${icon("contact")}<span>${candidate.matchCaseId ? "联系方式不会进入分享内容" : "演示候选不开放联系方式"}</span>${icon("lock")}</button>`;
   return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo ${roomVisualClass(candidate.listing.id)}"></div><div><b>${escapeText(candidate.listing.shortTitle)}</b><span>¥${formatInteger(candidate.agreedRent)}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button>${contactAction}</section></div>`;
 }
 
@@ -1130,6 +1164,10 @@ function reportResultSheet() {
   return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>处理结果</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="report-result"><span>${icon("shield")}</span><h3>${confirmed ? "账号及关联房源已冻结" : "房源已退出新匹配"}</h3><p>${escapeText(state.reportResult?.finalAction)}</p></div><button class="secondary-button" data-action="close-sheet">完成</button></section></div>`;
 }
 
+function contactSheet() {
+  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet contact-settings-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>设置联系方式</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><p>只在双方确认同一版条款后，通过服务端临时授权给对方。</p><label><span>类型</span><select data-contact-type><option value="wechat" ${state.contactProfile?.type === "wechat" ? "selected" : ""}>微信</option><option value="phone" ${state.contactProfile?.type === "phone" ? "selected" : ""}>手机</option><option value="email" ${state.contactProfile?.type === "email" ? "selected" : ""}>邮箱</option></select></label><label><span>新联系方式</span><input data-contact-value autocomplete="off" maxlength="254" placeholder="输入后将加密保存" /></label>${state.contactProfile ? `<small>当前已保存：${escapeText(state.contactProfile.maskedValue)}</small>` : ""}<button class="primary-button" data-action="save-contact" ${state.contactSubmitting ? "disabled" : ""}>${state.contactSubmitting ? "正在加密保存…" : "加密保存"}</button></section></div>`;
+}
+
 function activeSheet() {
   if (state.sheet === "create") return createSheet();
   if (state.sheet === "location") return locationSheet();
@@ -1138,6 +1176,7 @@ function activeSheet() {
   if (state.sheet === "lab") return labSheet();
   if (state.sheet === "report") return reportSheet();
   if (state.sheet === "report-result") return reportResultSheet();
+  if (state.sheet === "contact") return contactSheet();
   return "";
 }
 
@@ -1324,8 +1363,18 @@ function startTaskPolling(taskId) {
     polling = true;
     try {
       applyServerSnapshot(await getServerTask(taskId));
+      if (state.page === "candidate" && state.activeMatchCase?.id) {
+        const previousCase = state.activeMatchCase;
+        const { matchCase } = await getMatchCase(previousCase.id);
+        state.activeMatchCase = matchCase;
+        if (!matchCase.contactUnlocked) state.revealedContact = null;
+        if (previousCase.status !== matchCase.status
+          || previousCase.contactUnlocked !== matchCase.contactUnlocked
+          || previousCase.updatedAt !== matchCase.updatedAt) render();
+      }
     } catch (error) {
       state.syncError = error.message;
+      state.revealedContact = null;
       render();
     } finally {
       polling = false;
@@ -1341,6 +1390,8 @@ async function initializeServerState() {
     state.demoBanner = Boolean(health.demoBanner);
     await ensureServerSession();
     state.serverReady = true;
+    const profileContact = await getProfileContact();
+    state.contactProfile = profileContact.contact;
     const knownId = state.task?.remoteId;
     const { tasks } = await listServerTasks();
     // The repository returns newest tasks first. Prefer the latest active task
@@ -1466,6 +1517,9 @@ function resetAll() {
     activeMatchCaseLoading: false,
     activeMatchCaseError: null,
     clarificationSubmitting: null,
+    revealedContact: null,
+    contactLoading: false,
+    contactSubmitting: false,
     reportResult: null,
     taskNotices: [{ ...demoRenewalTask, lifecycle: createTaskLifecycle(addDaysToIso(todayInShanghai(), -25)) }],
     archivedTasks: [],
@@ -1591,10 +1645,10 @@ app.addEventListener("click", async (event) => {
   const action = target.dataset.action;
   const value = target.dataset.value;
   switch (action) {
-    case "switch-tab": state.tab = value; state.page = "root"; if (value === "messages") state.messagesRead = true; render(); break;
+    case "switch-tab": state.tab = value; state.page = "root"; state.revealedContact = null; if (value === "messages") state.messagesRead = true; render(); break;
     case "open-create": state.sheet = "create"; render(); break;
     case "close-sheet":
-    case "close-sheet-from-scrim": state.sheet = null; render(); break;
+    case "close-sheet-from-scrim": state.sheet = null; state.contactSubmitting = false; render(); break;
     case "create-renter": state.sheet = null; state.flow = "renter"; state.renterStage = "input"; state.renterFieldStates = {}; state.renterInputVersion = 0; render(); break;
     case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyFieldStates = {}; state.supplyInputVersion = 0; state.supplyEvidenceRefs = {}; state.photoPreviews = []; render(); break;
     case "cancel-flow": state.flow = null; state.page = "root"; render(); break;
@@ -1697,8 +1751,8 @@ app.addEventListener("click", async (event) => {
       }
       break;
     }
-    case "open-candidate": state.activeCandidateId = target.dataset.id; state.page = "candidate"; await loadActiveMatchCase(); break;
-    case "back-root": state.page = "root"; state.tab = "results"; state.activeMatchCase = null; state.activeMatchCaseError = null; render(); break;
+    case "open-candidate": state.activeCandidateId = target.dataset.id; state.page = "candidate"; state.revealedContact = null; await loadActiveMatchCase(); break;
+    case "back-root": state.page = "root"; state.tab = "results"; state.activeMatchCase = null; state.activeMatchCaseError = null; state.revealedContact = null; render(); break;
     case "retry-match-case": await loadActiveMatchCase(); break;
     case "answer-clarification-option": await submitClarification(target.dataset.id, target.dataset.value); break;
     case "submit-clarification": {
@@ -1723,8 +1777,10 @@ app.addEventListener("click", async (event) => {
       try {
         const response = await confirmMatchCase(matchCase.id, matchCase.currentTerms.version, matchCase.currentTerms.hash);
         state.activeMatchCase = response.matchCase;
+        state.revealedContact = null;
         showToast(response.idempotent ? "你已经确认过当前条款" : response.matchCase.status === "mutually_confirmed" ? "双方已确认同一条款" : "已确认，正在等待对方");
       } catch (error) {
+        if (error.code === "CONTACT_REQUIRED") state.sheet = "contact";
         showToast(error.message || "确认失败");
         await loadActiveMatchCase();
       }
@@ -1737,6 +1793,7 @@ app.addEventListener("click", async (event) => {
       try {
         const response = await declineMatchCase(matchCase.id, matchCase.currentTerms.version, matchCase.currentTerms.hash);
         state.activeMatchCase = response.matchCase;
+        state.revealedContact = null;
         showToast(response.idempotent ? "你已经拒绝当前条款" : "已拒绝当前条款");
       } catch (error) {
         showToast(error.message || "拒绝失败");
@@ -1744,6 +1801,25 @@ app.addEventListener("click", async (event) => {
       }
       break;
     }
+    case "reveal-contact": {
+      const matchCase = state.activeMatchCase;
+      if (!matchCase?.contactUnlocked || state.contactLoading) break;
+      state.contactLoading = true;
+      render();
+      try {
+        const response = await getMatchContact(matchCase.id);
+        state.revealedContact = response.contact;
+      } catch (error) {
+        state.revealedContact = null;
+        showToast(error.message || "联系方式仍处于锁定状态");
+        await loadActiveMatchCase();
+      } finally {
+        state.contactLoading = false;
+        render();
+      }
+      break;
+    }
+    case "hide-contact": state.revealedContact = null; render(); break;
     case "contact-tenant": showToast("已发起双方确认"); break;
     case "open-share": state.sheet = "share"; render(); break;
     case "copy-listing": {
@@ -1765,7 +1841,27 @@ app.addEventListener("click", async (event) => {
     }
     case "open-lab": state.sheet = "lab"; render(); break;
     case "open-insights": state.page = "insights"; render(); break;
-    case "open-settings": state.page = "settings"; state.sheet = null; render(); break;
+    case "open-settings": state.page = "settings"; state.sheet = null; state.revealedContact = null; render(); break;
+    case "open-contact-settings": state.sheet = "contact"; render(); break;
+    case "save-contact": {
+      const type = app.querySelector("[data-contact-type]")?.value;
+      const contactValue = app.querySelector("[data-contact-value]")?.value;
+      if (!contactValue?.trim()) { showToast("请先填写联系方式"); break; }
+      target.disabled = true;
+      state.contactSubmitting = true;
+      try {
+        const response = await setProfileContact(type, contactValue);
+        state.contactProfile = response.contact;
+        state.sheet = null;
+        showToast("联系方式已加密保存");
+      } catch (error) {
+        showToast(error.message || "联系方式保存失败");
+      } finally {
+        state.contactSubmitting = false;
+        render();
+      }
+      break;
+    }
     case "toggle-setting":
       state.settings[value] = !state.settings[value];
       render();

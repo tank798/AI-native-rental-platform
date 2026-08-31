@@ -7,6 +7,8 @@ import {
 import { createClock } from "../clock.mjs";
 import { createClarificationService } from "./clarification-service.mjs";
 import { createConfirmationService } from "./confirmation-service.mjs";
+import { createContactGrantService } from "./contact-grant-service.mjs";
+import { createContactService } from "./contact-service.mjs";
 import { createMatchCaseRepository } from "./match-case-repository.mjs";
 import { createMatchCaseService } from "./match-case-service.mjs";
 import { createTaskRepository } from "./task-repository.mjs";
@@ -68,17 +70,40 @@ function candidateCounterparty(candidate, fallbackPrefix) {
  * Real mode only compares persisted tasks; demo mode additionally scans the
  * fixture corpus so product demonstrations remain available and explicit.
  */
-export function createMatchingService(repository, { marketMode = "real", clock = createClock() } = {}) {
+export function createMatchingService(repository, {
+  marketMode = "real",
+  clock = createClock(),
+  contactEncryptionKey = null,
+  onContactSecurityError = () => {}
+} = {}) {
   const normalizedMarketMode = normalizeMarketMode(marketMode);
+  const effectiveContactKey = contactEncryptionKey || (normalizedMarketMode === "demo" ? Buffer.alloc(32, 0x44).toString("base64") : null);
   const taskRepository = createTaskRepository({ database: repository, clock });
   const matchCaseRepository = createMatchCaseRepository({ database: repository, clock });
+  const contacts = createContactService({
+    database: repository,
+    encryptionKey: effectiveContactKey,
+    clock,
+    onSecurityError: onContactSecurityError
+  });
+  const contactGrants = createContactGrantService({
+    database: repository,
+    matchCaseRepository,
+    contactService: contacts,
+    clock
+  });
   const clarifications = createClarificationService({
     taskRepository,
     matchCaseRepository,
     clock,
     recalculate: (taskId) => processTask(taskId)
   });
-  const confirmations = createConfirmationService({ matchCaseRepository, clock });
+  const confirmations = createConfirmationService({
+    matchCaseRepository,
+    contactService: contacts,
+    contactGrantService: contactGrants,
+    clock
+  });
   const matchCases = createMatchCaseService({
     taskRepository,
     matchCaseRepository,
@@ -201,6 +226,8 @@ export function createMatchingService(repository, { marketMode = "real", clock =
     matchCases,
     clarifications,
     confirmations,
+    contacts,
+    contactGrants,
     matchCaseRepository,
     taskRepository,
     processTask,

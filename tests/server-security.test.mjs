@@ -5,13 +5,22 @@ import os from "node:os";
 import path from "node:path";
 
 import { createRentalServer } from "../server.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
+
+test("真实市场缺少有效联系人密钥时在打开数据库前拒绝启动", () => {
+  assert.throws(
+    () => createRentalServer({ marketMode: "real", environment: {}, contactEncryptionKey: null, enableScheduler: false }),
+    /CONTACT_ENCRYPTION_KEY/u
+  );
+});
 
 test("静态页面返回阻断脚本注入和嵌入的安全响应头", async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zhunaer-security-"));
   const app = createRentalServer({
     databasePath: path.join(tempDir, "rental.sqlite"),
     uploadRoot: path.join(tempDir, "uploads"),
-    enableScheduler: false
+    enableScheduler: false,
+    contactEncryptionKey: testContactEncryptionKey()
   });
   let address;
   try {
@@ -40,4 +49,3 @@ test("静态页面返回阻断脚本注入和嵌入的安全响应头", async (t
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
   assert.match(response.headers.get("permissions-policy") || "", /geolocation=\(\)/);
 });
-

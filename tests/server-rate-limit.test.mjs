@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createRentalServer } from "../server.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
 
 const validModelResponse = {
   choices: [{
@@ -44,6 +45,7 @@ async function startTestApp(t, { policy }) {
     databasePath: path.join(tempDir, "rental.sqlite"),
     uploadRoot: path.join(tempDir, "uploads"),
     enableScheduler: false,
+    contactEncryptionKey: testContactEncryptionKey(),
     aiApiKey: "test-key",
     rateLimitPolicy: policy,
     aiClientOptions: {

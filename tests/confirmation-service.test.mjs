@@ -7,10 +7,13 @@ import test from "node:test";
 import { createClock } from "../src/clock.mjs";
 import { baseMandate, demoSupplyDraft } from "../src/fixtures.mjs";
 import { createConfirmationService } from "../src/server/confirmation-service.mjs";
+import { createContactGrantService } from "../src/server/contact-grant-service.mjs";
+import { createContactService } from "../src/server/contact-service.mjs";
 import { openRentalDatabase } from "../src/server/database.mjs";
 import { createMatchCaseRepository } from "../src/server/match-case-repository.mjs";
 import { createMatchCaseService } from "../src/server/match-case-service.mjs";
 import { createTaskRepository } from "../src/server/task-repository.mjs";
+import { testContactEncryptionKey } from "./test-secrets.mjs";
 
 async function fixture(t) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zhunaer-confirmation-"));
@@ -19,12 +22,16 @@ async function fixture(t) {
   const taskRepository = createTaskRepository({ database, clock });
   const matchCaseRepository = createMatchCaseRepository({ database, clock });
   const matchCases = createMatchCaseService({ taskRepository, matchCaseRepository, clock });
-  const confirmations = createConfirmationService({ matchCaseRepository, clock });
+  const contacts = createContactService({ database, encryptionKey: testContactEncryptionKey(), clock });
+  const contactGrants = createContactGrantService({ database, matchCaseRepository, contactService: contacts, clock });
+  const confirmations = createConfirmationService({ matchCaseRepository, contactService: contacts, contactGrantService: contactGrants, clock });
   t.after(async () => {
     database.close();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
   for (const owner of ["owner-r", "owner-s", "owner-x"]) database.createProfile({ id: owner, tokenHash: `token-${owner}` });
+  contacts.set("owner-r", { type: "wechat", value: "renter-confirmation" });
+  contacts.set("owner-s", { type: "wechat", value: "supply-confirmation" });
   database.createTask({
     id: "renter",
     ownerId: "owner-r",
@@ -65,7 +72,10 @@ test("双方只有确认同一 version/hash 才 mutually_confirmed，相同请�
   assert.equal(second.otherDecision, "confirmed");
   matchCases.processTask("renter");
   assert.equal(matchCaseRepository.get(matchCase.id).status, "mutually_confirmed");
-  assert.doesNotMatch(JSON.stringify({ confirmations: matchCaseRepository.listConfirmations(matchCase.id), events: matchCaseRepository.listEvents(matchCase.id) }), /contact|hardMax|minimumAuthorizedRent/);
+  assert.doesNotMatch(
+    JSON.stringify({ confirmations: matchCaseRepository.listConfirmations(matchCase.id), events: matchCaseRepository.listEvents(matchCase.id) }),
+    /renter-confirmation|supply-confirmation|hardMax|minimumAuthorizedRent/u
+  );
 });
 
 test("过期 version/hash 返回 409，第三方返回 404", async (t) => {

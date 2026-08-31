@@ -17,8 +17,9 @@ function decisionFor(items, party) {
 }
 
 /** Enforces same-document, same-input bilateral consent for one match case. */
-export function createConfirmationService({ matchCaseRepository, clock = createClock() }) {
+export function createConfirmationService({ matchCaseRepository, contactService, contactGrantService, clock = createClock() }) {
   if (!matchCaseRepository) throw new Error("confirmation service requires matchCaseRepository");
+  if (!contactService || !contactGrantService) throw new Error("confirmation service requires contact services");
 
   function context(matchCaseId, ownerId) {
     const matchCase = matchCaseRepository.getForOwner(matchCaseId, ownerId);
@@ -47,10 +48,20 @@ export function createConfirmationService({ matchCaseRepository, clock = createC
   function decide({ matchCaseId, ownerId, termsVersion, termsHash, decision }) {
     const { matchCase, participant } = context(matchCaseId, ownerId);
     assertCurrent(matchCase, termsVersion, termsHash);
+    contactGrantService.assertCaseActive(matchCaseId);
+    if (decision === "confirmed") contactGrantService.assertOwnerHasContact(ownerId);
     const current = activeDecisions(matchCaseRepository, matchCase);
     const mine = current.find((item) => item.party === participant.party);
 
-    if (mine?.decision === decision) return snapshot(matchCase, participant.party, true);
+    if (mine?.decision === decision) {
+      if (decision === "confirmed" && matchCase.status === "mutually_confirmed") {
+        return matchCaseRepository.transaction(() => {
+          contactGrantService.issue(matchCaseId, clock.nowIso());
+          return snapshot(matchCaseRepository.get(matchCaseId), participant.party, true);
+        });
+      }
+      return snapshot(matchCase, participant.party, true);
+    }
     if (mine?.decision === "declined" && decision === "confirmed") {
       throw serviceError(409, "MATCH_ALREADY_DECLINED", "你已经拒绝当前条款");
     }
@@ -90,6 +101,8 @@ export function createConfirmationService({ matchCaseRepository, clock = createC
         status = "awaiting_confirmations";
       }
       const updated = matchCaseRepository.setCaseStatus(matchCaseId, status, terminalReason, at);
+      if (status === "mutually_confirmed") contactGrantService.issue(matchCaseId, at);
+      if (status === "declined") contactGrantService.revokeForCase(matchCaseId, "party_declined", at);
       return snapshot(updated, participant.party, false);
     });
   }

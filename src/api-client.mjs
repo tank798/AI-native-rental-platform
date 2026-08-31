@@ -88,6 +88,17 @@ export function listServerTasks() {
   return apiRequest("/api/tasks");
 }
 
+export function getProfileContact() {
+  return apiRequest("/api/profile/contact");
+}
+
+export function setProfileContact(type, value) {
+  return apiRequest("/api/profile/contact", {
+    method: "PUT",
+    body: JSON.stringify({ type, value })
+  });
+}
+
 export function getServerTask(taskId) {
   return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}`);
 }
@@ -112,6 +123,10 @@ export function declineMatchCase(matchCaseId, termsVersion, termsHash) {
     method: "POST",
     body: JSON.stringify({ termsVersion, termsHash })
   });
+}
+
+export function getMatchContact(matchCaseId) {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/contact`);
 }
 
 export function answerMatchClarification(matchCaseId, clarificationId, answer) {

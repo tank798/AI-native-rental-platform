@@ -70,19 +70,19 @@ flowchart LR
 租客可以用自然语言描述区域、预算、入住时间、通勤、合租、租期和设施。Qwen3.5 先整理字段，规则层再复核明确事实，用户仍可在发布前修改。
 
 | AI 结构化需求 | 最终任务授权 |
-|---|---|
+|:---:|:---:|
 | ![租客 AI 结构化](./output/playwright/02-renter-ai-intake.png) | ![租客任务确认](./output/playwright/03-renter-task-review.png) |
 
 发布后任务不会把一次扫描伪装成最终结果。首页明确显示“仍在持续找房”，候选页显示“持续匹配中”。
 
 | 持续匹配状态 | 已筛选的候选房源 |
-|---|---|
+|:---:|:---:|
 | ![持续匹配](./output/playwright/04-continuous-matching.png) | ![租客候选结果](./output/playwright/05-renter-results.png) |
 
 候选详情不是简单展示房源原文，而是按当前租客任务重新组织：展示为什么合适、需要留意什么、资料来源、当前意向租金和分身协商过程。
 
 | 匹配依据与核验来源 | 两个分身的协商记录 |
-|---|---|
+|:---:|:---:|
 | ![候选详情](./output/playwright/06-candidate-detail.png) | ![分身协商](./output/playwright/07-agent-negotiation.png) |
 
 ### 2. 出租端：从房源描述到持续找租客
@@ -90,7 +90,7 @@ flowchart LR
 发布者只能选择“房东本人”或“当前租客”。自然语言会被整理成位置、挂牌价、最低授权价、入住时间、租期、楼层、室友和设施等字段。
 
 | AI 整理房源 | 确认房间与设施 |
-|---|---|
+|:---:|:---:|
 | ![出租端 AI 结构化](./output/playwright/08-supply-ai-intake.png) | ![出租端房源详情](./output/playwright/09-supply-details.png) |
 
 出租任务必须提交身份材料、发布角色材料、出租权材料和房屋现场照片。服务端会验证材料是否属于当前会话、类型是否对应，不能通过篡改前端布尔值绕过。
@@ -138,7 +138,7 @@ flowchart LR
 
 - 租客候选隐藏房东最低授权价和精确地址。
 - 房东候选隐藏租客目标预算和最高预算。
-- 联系方式默认锁定，只有结果形成且双方确认后才进入交换流程。
+- 联系方式默认锁定；只有双方确认同一条款哈希、服务端授权仍有效且任务仍 active 时才能按当前会话读取对手方联系人。
 - 用户可查看匹配依据、未知项、风险提示和结构化协商记录。
 
 ## 系统架构
@@ -148,7 +148,7 @@ flowchart TB
     subgraph Browser[浏览器 / iPhone-first Web App]
         UI[对话、表单、候选和任务状态]
         Poll[每 3 秒任务快照轮询]
-        Session[本地会话 Token]
+        Session[HttpOnly 会话 Cookie]
     end
 
     subgraph Server[Node.js HTTP 服务]
@@ -187,7 +187,7 @@ flowchart TB
 ### 主要模块
 
 | 模块 | 文件 | 职责 |
-|---|---|---|
+|:---:|:---:|:---:|
 | 浏览器应用 | `src/app.mjs` | 信息架构、找房与出租流程、任务恢复、候选和交互 |
 | 样式系统 | `src/app.css` | iOS-first 布局、响应式设备框、匹配动画和组件状态 |
 | API 客户端 | `src/api-client.mjs` | 会话、AI intake、材料上传、任务创建和快照请求 |
@@ -245,15 +245,16 @@ flowchart TB
 
 ### Key 与本地配置
 
-- API Key 不写入源代码、README、浏览器或数据库。
-- Key 从进程环境变量或本地 Key 文件读取。
-- `.env.local` 被 Git 忽略，只建议保存 Key 文件路径和模型名。
+- 模型 API Key 和联系人加密密钥都不写入源代码、README、浏览器或数据库。
+- 模型 Key 从进程环境变量或本地 Key 文件读取；联系人密钥只从服务端环境读取。
+- `.env.local` 被 Git 忽略，可保存 Key 文件路径、模型名和本机生成的联系人密钥。
 - `.env.example` 只提供占位配置，不包含任何真实凭证。
+- real 模式必须配置 32 字节 base64 `CONTACT_ENCRYPTION_KEY`；联系人使用 AES-256-GCM 和逐条随机 nonce 加密。
 
 ### 用户和任务隔离
 
-- 浏览器首次进入时创建随机会话 Token。
-- 服务端只保存 Token 哈希，后续 API 使用 Bearer Token。
+- 浏览器首次进入时创建随机会话 secret，并只通过 HttpOnly、SameSite Cookie 发送。
+- 服务端只保存 secret 哈希；浏览器 JavaScript 和 localStorage 都拿不到原值。
 - 任务、材料和候选读取都验证当前会话所有权。
 - 上传材料按 `data/uploads/<owner-id>/` 分目录保存，文件权限设置为仅当前用户可读写。
 - 精确地址、材料存储路径和私密价格不会进入公开候选负载。
@@ -269,7 +270,8 @@ flowchart TB
 - Node.js 24 推荐；Node.js 22+ 可运行当前代码。
 - npm。
 - macOS、Linux 或 Windows 均可；截图中的界面为桌面浏览器中的 iPhone-first 布局。
-- 可选：SiliconFlow API Key，用于启用 Qwen3.5；没有 Key 仍可使用安全解析模式。
+- 必填：本机生成的联系人加密密钥；real 模式缺少或格式错误时拒绝启动。
+- 可选：SiliconFlow API Key，用于启用 Qwen3.5；没有模型 Key 仍可使用安全解析模式。
 
 本项目当前不依赖第三方 npm 运行时包，SQLite 使用 Node.js 内置 `node:sqlite`。
 
@@ -280,7 +282,7 @@ git clone https://github.com/tank798/AI-native-rental-platform.git
 cd AI-native-rental-platform
 ```
 
-### 2. 可选：配置 Qwen3.5
+### 2. 配置本地安全密钥；按需启用 Qwen3.5
 
 复制示例配置：
 
@@ -291,9 +293,18 @@ cp .env.example .env.local
 编辑 `.env.local`：
 
 ```dotenv
+CONTACT_ENCRYPTION_KEY="把 openssl rand -base64 32 的输出填在这里"
 SILICONFLOW_API_KEY_FILE="/absolute/path/to/siliconflow-api-key.txt"
 SILICONFLOW_MODEL="Qwen/Qwen3.5-35B-A3B"
 ```
+
+联系人密钥可以这样生成：
+
+```bash
+openssl rand -base64 32
+```
+
+每套已存在的数据必须继续使用原密钥，否则历史联系人密文无法解密。生产环境应改用 KMS 包络加密或独立 secrets 服务。
 
 Key 文件可以只包含 Key，也可以写成：
 
@@ -329,7 +340,9 @@ npm start
 5. 点击底部加号，新建“我要出租”任务。
 6. 输入房源、角色、租金、入住、室友和设施。
 7. 使用测试图片完成四类材料演示，不要上传真实证件。
-8. 发布后查看匿名候选租客和最终意向租金。
+8. 在“我的 → 设置”中为两端账号分别保存测试联系方式。
+9. 双方确认同一版条款，确认只有单方时联系人仍锁定。
+10. 第二方确认后主动点击“查看联系方式”，验证页面离开后原值消失。
 
 ### 重置本地演示数据
 
@@ -337,15 +350,12 @@ npm start
 
 ## API 说明
 
-除健康检查和创建会话外，API 均需要：
+除健康检查和创建会话外，API 均需要有效的 HttpOnly 会话 Cookie；浏览器由 `/api/session` 自动建立，不把原始 Token 暴露给 JavaScript。
 
-```http
-Authorization: Bearer <session-token>
-Content-Type: application/json
-```
+修改类请求还必须通过同源检查，并使用 `Content-Type: application/json`。
 
 | 方法 | 路径 | 说明 |
-|---|---|---|
+|:---:|:---:|:---:|
 | `GET` | `/api/health` | 返回 SQLite、AI 配置和持续匹配状态 |
 | `POST` | `/api/session` | 创建独立浏览器会话 |
 | `POST` | `/api/intake/renter` | 结构化租客自然语言需求 |
@@ -355,6 +365,12 @@ Content-Type: application/json
 | `GET` | `/api/tasks` | 获取当前会话的任务列表，最新任务优先 |
 | `GET` | `/api/tasks/:id` | 获取任务、候选和审计事件快照 |
 | `PATCH` | `/api/tasks/:id` | 把任务设为 `active`、`paused` 或 `closed` |
+| `GET` | `/api/tasks/:id/matches` | 获取任务关联的本人可见双边案例 |
+| `GET` | `/api/matches/:id` | 获取条款、澄清和双方确认状态 |
+| `POST` | `/api/matches/:id/confirm` | 确认当前条款版本与哈希 |
+| `POST` | `/api/matches/:id/decline` | 拒绝当前条款版本与哈希 |
+| `GET` / `PUT` | `/api/profile/contact` | 读取掩码或加密保存本人联系方式 |
+| `GET` | `/api/matches/:id/contact` | 有效授权下读取对手方联系人 |
 
 ### Intake 请求示例
 
@@ -375,12 +391,17 @@ Content-Type: application/json
 SQLite 当前包含以下核心表：
 
 | 表 | 关键字段 | 用途 |
-|---|---|---|
+|:---:|:---:|:---:|
 | `profiles` | `id`, `token_hash`, `created_at` | 匿名本地会话 |
 | `evidence_uploads` | `owner_id`, `kind`, `storage_path`, `sha256` | 私有发布材料记录 |
 | `tasks` | `owner_id`, `kind`, `status`, `payload_json`, `expires_at` | 找房和出租任务 |
 | `match_candidates` | `receiver_task_id`, `counterparty_id`, `payload_json` | 按接收方生成的候选 |
 | `audit_events` | `task_id`, `type`, `payload_json`, `created_at` | 任务运行与候选变化审计 |
+| `match_cases` / `match_terms` | 双方任务、输入版本、公开条款哈希 | 权威双边案例与同版确认基线 |
+| `party_confirmations` | 双方、条款哈希、输入版本、决定、撤销时间 | 服务端确认历史 |
+| `profile_contacts` | 类型、AES-GCM 密文信封、掩码 | 私密联系人存储 |
+| `contact_grants` | 案例、条款与输入快照、有效期、撤销原因 | 联系方式读取能力 |
+| `match_events` | 案例、事件类型、脱敏 payload | 澄清、确认与授权审计 |
 
 当前使用 SQLite 是为了让完整链路可以零依赖复现。生产环境建议迁移到 PostgreSQL，并使用数据库行级安全策略、KMS、私有对象存储和不可变事件日志。
 
@@ -419,7 +440,7 @@ npm run eval:marketplace
 当前基线：
 
 | 指标 | 结果 |
-|---|---:|
+|:---:|:---:|
 | 房源语料 | 100 条 |
 | 租客语料 | 100 条 |
 | 房源核心字段准确率 | 100.0% |
