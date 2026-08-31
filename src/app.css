@@ -37,7 +37,7 @@ input,
 textarea,
 select { font: inherit; }
 
-button { color: inherit; }
+button { min-height: 44px; color: inherit; }
 
 button,
 label,
@@ -82,6 +82,17 @@ button { cursor: pointer; }
 
 #app { width: 100%; height: 100dvh; }
 
+.sr-only {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .device {
   width: min(100%, 414px);
   height: 100dvh;
@@ -98,6 +109,32 @@ button { cursor: pointer; }
   background: white;
   isolation: isolate;
 }
+
+.connection-bar {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px var(--screen-x);
+  flex: 0 0 auto;
+  border-block: 1px solid #e9edf3;
+  background: #f7faff;
+  color: #334155;
+}
+
+.connection-bar > div { min-width: 0; display: flex; align-items: baseline; gap: 7px; }
+.connection-bar b { font-size: 12px; white-space: nowrap; }
+.connection-bar small { overflow: hidden; color: #66758a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.connection-dot { width: 8px; height: 8px; border-radius: 50%; background: #22a06b; box-shadow: 0 0 0 4px rgba(34, 160, 107, .1); }
+.connection-bar.is-connecting .connection-dot { background: #6c7a90; animation: pulse-control 1.3s infinite; }
+.connection-bar.is-degraded { border-color: #f3dfad; background: #fff9eb; color: #825b05; }
+.connection-bar.is-degraded .connection-dot { background: #d79a14; box-shadow: 0 0 0 4px rgba(215, 154, 20, .12); }
+.connection-bar.is-offline { border-color: #f4c8ca; background: #fff3f3; color: #9f2430; }
+.connection-bar.is-offline .connection-dot { background: var(--danger); box-shadow: 0 0 0 4px rgba(220, 48, 58, .1); }
+.connection-bar button { min-width: 54px; padding: 0 10px; border: 1px solid currentColor; border-radius: 12px; background: white; color: inherit; font-size: 12px; font-weight: 800; }
+
+[inert] { pointer-events: none; user-select: none; }
 
 .status-bar {
   display: flex;
@@ -4570,12 +4607,60 @@ body[data-motion="reduced"] .voice-control.is-listening::after {
   cursor: not-allowed;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .agent-breathing-light i,
-  .searching-dots i {
-    animation: none;
-  }
+.dialogue-field.has-error,
+.contact-settings-sheet .field-error {
+  color: var(--danger);
 }
+
+.dialogue-field.has-error > div {
+  border-radius: 14px;
+  box-shadow: 0 0 0 2px rgba(220, 48, 58, .16);
+}
+
+.field-error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"],
+button[aria-invalid="true"] {
+  outline: 2px solid rgba(220, 48, 58, .45);
+  outline-offset: 2px;
+}
+
+.composer-card textarea:focus-visible,
+.form-card textarea:focus-visible,
+.money-input input:focus-visible,
+.map-search input:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--blue), transparent 55%);
+  outline-offset: 3px;
+}
+
+.bottom-sheet > header button { width: 44px; height: 44px; }
+.map-pin,
+.selected-areas button,
+.radius-control button { min-height: 44px; }
+
+html,
+body,
+#app,
+.device,
+.app-shell { max-width: 100%; overflow-x: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+body[data-motion="reduced"] *,
+body[data-motion="reduced"] *::before,
+body[data-motion="reduced"] *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 
 @media (max-height: 650px) {
   .simple-search-field {

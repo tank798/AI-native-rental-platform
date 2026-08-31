@@ -53,6 +53,7 @@ test("用户修改 AI 预填后，发布请求使用用户最终确认值", asyn
   });
 
   await page.goto(testServer.baseURL);
+  await expect(page.locator('[data-connection-phase="online"]')).toBeVisible();
   await page.locator('[data-input="draft-text"]').fill("静安寺附近，预算3000到3200，9月3日入住，女生合租，租12个月");
   await page.locator('[data-action="home-intake"]').click();
   await expect(page.locator('[data-input="budget-max"]')).toHaveValue("3200");
@@ -175,5 +176,77 @@ test("单方确认仍锁定联系人，双方确认同版条款后才解锁", as
   } finally {
     await renter.context.close();
     await supply.context.close();
+  }
+});
+
+test("连接失败持续可见，重试成功后恢复且通过独立 live region 播报", async ({ page }) => {
+  let failHealth = true;
+  await page.route("**/api/health", async (route) => {
+    if (!failHealth) return route.continue();
+    return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "测试断网" }) });
+  });
+
+  await page.goto(testServer.baseURL);
+  const connection = page.locator("[data-connection-phase]");
+  await expect(connection).toHaveAttribute("data-connection-phase", "offline");
+  await expect(connection).toContainText("重试");
+  failHealth = false;
+  await connection.getByRole("button", { name: "重试" }).click();
+  await expect(connection).toHaveAttribute("data-connection-phase", "online");
+  await expect(page.locator("#app-live-region")).toHaveText("连接已恢复");
+  await expect(page.locator("#app")).not.toHaveAttribute("aria-live", /.+/u);
+});
+
+test("需求错误显示在字段旁并把焦点移到第一个无效字段", async ({ page }) => {
+  await page.goto(testServer.baseURL);
+  await expect(page.locator('[data-connection-phase="online"]')).toBeVisible();
+  await page.locator('[data-input="draft-text"]').fill("静安寺附近找房");
+  await page.locator('[data-action="home-intake"]').click();
+  await expect(page.locator('[data-action="review-mandate"]')).toBeVisible();
+  await page.locator('[data-action="review-mandate"]').click();
+
+  const budgetMin = page.locator('[data-input="budget-min"]');
+  await expect(budgetMin).toHaveAttribute("aria-invalid", "true");
+  await expect(page.locator("#field-error-budget")).toContainText("月租范围");
+  await expect(budgetMin).toBeFocused();
+  await expect(page.locator(".toast")).toHaveCount(0);
+
+  await budgetMin.fill("3000");
+  await page.locator('[data-input="budget-max"]').fill("3500");
+  await expect(page.locator("#field-error-budget")).toHaveCount(0);
+  await page.locator('[data-input="move-in-from"]').fill("2026-09-03");
+  await page.locator('[data-input="move-in-to"]').fill("2026-09-10");
+  await page.locator('[data-action="review-mandate"]').click();
+  await expect(page.getByRole("heading", { name: /静安寺/u })).toBeVisible();
+});
+
+test("弹层限制键盘焦点、支持 Esc 并恢复到触发按钮", async ({ page }) => {
+  await page.goto(testServer.baseURL);
+  const trigger = page.locator('[data-action="open-create"]');
+  await trigger.focus();
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "新建任务" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  expect(await page.locator("#app-main").evaluate((element) => element.inert)).toBe(true);
+  expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Shift+Tab");
+  expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test("320、375、430 像素视口均无水平溢出", async ({ page }) => {
+  for (const width of [320, 375, 430]) {
+    await page.setViewportSize({ width, height: 780 });
+    await page.goto(testServer.baseURL);
+    await expect(page.locator("#app-main")).toBeVisible();
+    const overflow = await page.evaluate(() => ({
+      document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      body: document.body.scrollWidth - document.body.clientWidth,
+      app: document.querySelector("#app").scrollWidth - document.querySelector("#app").clientWidth
+    }));
+    expect(overflow).toEqual({ document: 0, body: 0, app: 0 });
   }
 });

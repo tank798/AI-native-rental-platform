@@ -46,12 +46,15 @@ import {
   uploadEvidenceFile
 } from "./api-client.mjs";
 import { escapeAttribute, escapeText } from "./ui/safe-markup.mjs";
+import { createFocusManager } from "./ui/focus-manager.mjs";
 import { renderMatchDetail } from "./ui/match-detail.mjs";
 import { parseRoute, pushRoute, replaceRoute } from "./ui/router.mjs";
 import { renderTaskCenter } from "./ui/task-center.mjs";
 
 const app = document.querySelector("#app");
+const liveRegion = document.querySelector("#app-live-region");
 const clientClock = createClock();
+const focusManager = createFocusManager({ documentRef: document });
 
 const iconPaths = {
   radar: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 4V2M20 12h2M12 20v2M4 12H2"/>',
@@ -199,6 +202,12 @@ function initialProductState() {
     intakeLoading: false,
     serverReady: false,
     syncError: null,
+    connection: {
+      phase: "connecting",
+      message: "正在连接服务",
+      lastSuccessAt: null
+    },
+    fieldErrors: {},
     marketMode: "real",
     demoBanner: false,
     photoPreviews: [],
@@ -217,6 +226,7 @@ function initialProductState() {
     activeMatchCaseError: null,
     clarificationSubmitting: null,
     contactProfile: null,
+    contactDraft: "",
     revealedContact: null,
     contactLoading: false,
     contactSubmitting: false,
@@ -264,6 +274,12 @@ let toastTimer = null;
 let lastViewKey = null;
 let matchTimers = [];
 let taskPollTimer = null;
+let lastAnnouncedMessage = "";
+let lastRenderedSheet = null;
+let modalTriggerFocusKey = null;
+let pendingFocusRestoreKey = null;
+let pendingInvalidFocus = false;
+let recoveryExpected = false;
 
 if (state.task?.remoteId && !state.task.delivered) {
   const restoredResult = state.task.kind === "renter" ? state.result : state.supplyResult;
@@ -306,6 +322,51 @@ function showToast(message) {
     state.toast = null;
     render();
   }, 2200);
+}
+
+function announce(message) {
+  if (!message || message === lastAnnouncedMessage || !liveRegion) return;
+  lastAnnouncedMessage = message;
+  liveRegion.textContent = "";
+  window.requestAnimationFrame(() => {
+    liveRegion.textContent = message;
+  });
+}
+
+function markConnectionSuccess() {
+  const previousPhase = state.connection.phase;
+  state.serverReady = true;
+  state.syncError = null;
+  state.connection = {
+    phase: "online",
+    message: "连接正常",
+    lastSuccessAt: clientClock.nowIso()
+  };
+  if (["offline", "degraded"].includes(previousPhase) || recoveryExpected) announce("连接已恢复");
+  recoveryExpected = false;
+}
+
+function markConnectionDegraded(message = "AI 暂时不可用，已使用确定性解析") {
+  state.serverReady = true;
+  state.syncError = message;
+  state.connection = {
+    ...state.connection,
+    phase: "degraded",
+    message
+  };
+  announce(message);
+}
+
+function markConnectionOffline(error) {
+  const message = error?.message || String(error || "暂时无法连接服务");
+  state.serverReady = false;
+  state.syncError = message;
+  state.connection = {
+    ...state.connection,
+    phase: "offline",
+    message
+  };
+  announce(`连接中断：${message}`);
 }
 
 async function copyText(text, successMessage) {
@@ -364,6 +425,16 @@ function confirmRenterAnswer(fieldKey, value) {
   state.answers[fieldKey] = value;
   state.renterFieldStates[fieldKey] = confirmField(state.renterFieldStates[fieldKey], value);
   state.renterInputVersion += 1;
+  const validationKey = {
+    location: "location",
+    budgetMin: "budget",
+    budgetMax: "budget",
+    moveInFrom: "moveIn",
+    moveInTo: "moveIn",
+    commute: "commute",
+    leaseMonths: "lease"
+  }[fieldKey];
+  if (validationKey && state.fieldErrors[validationKey]) refreshDemandFieldError(validationKey);
 }
 
 function confirmSupplyField(fieldKey, value) {
@@ -371,15 +442,36 @@ function confirmSupplyField(fieldKey, value) {
   state.supplyInputVersion += 1;
 }
 
-function validateDemandAnswers() {
+function validateDemandFields() {
   const mandate = mandateFromAnswers();
-  if (!mandate.locations.length) return "请在地图上选择区域";
-  if (!mandate.budget.target || !mandate.budget.hardMax) return "请填写月租范围";
-  if (mandate.budget.target < 500 || mandate.budget.hardMax < mandate.budget.target) return "月租范围需要从低到高";
-  if (!mandate.moveInWindow?.from || !mandate.moveInWindow?.to) return "请填写入住日期范围";
-  if (mandate.moveInWindow.to < mandate.moveInWindow.from) return "最晚入住日期不能早于最早日期";
-  if (mandate.maxCommuteMinutes < 15 || mandate.maxCommuteMinutes > 60) return "通勤时间需在 15 到 60 分钟之间";
-  if (!mandate.leaseFlexible && ![3, 6, 12].includes(Number(mandate.leaseMonths))) return "请选择租期";
+  const errors = {};
+  if (!mandate.locations.length) errors.location = "请在地图上选择区域";
+  if (!mandate.budget.target || !mandate.budget.hardMax) errors.budget = "请填写月租范围";
+  else if (mandate.budget.target < 500 || mandate.budget.hardMax < mandate.budget.target) errors.budget = "月租范围需要从低到高";
+  if (!mandate.moveInWindow?.from || !mandate.moveInWindow?.to) errors.moveIn = "请填写入住日期范围";
+  else if (mandate.moveInWindow.to < mandate.moveInWindow.from) errors.moveIn = "最晚入住日期不能早于最早日期";
+  if (mandate.maxCommuteMinutes < 15 || mandate.maxCommuteMinutes > 60) errors.commute = "通勤时间需在 15 到 60 分钟之间";
+  if (!mandate.leaseFlexible && ![3, 6, 12].includes(Number(mandate.leaseMonths))) errors.lease = "请选择租期";
+  return errors;
+}
+
+function refreshDemandFieldError(fieldKey) {
+  const message = validateDemandFields()[fieldKey];
+  if (message) state.fieldErrors[fieldKey] = message;
+  else delete state.fieldErrors[fieldKey];
+  applyFieldErrorAttributes();
+  if (!message) {
+    app.querySelector(`#field-error-${fieldKey}`)?.remove();
+    app.querySelector(`[data-field-group="${fieldKey}"]`)?.classList.remove("has-error");
+  }
+}
+
+function validateContactValue(type, value) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) return "请先填写联系方式";
+  if (type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(cleanValue)) return "请填写有效的邮箱地址";
+  if (type === "phone" && cleanValue.replace(/\D/gu, "").length < 7) return "手机号至少需要 7 位数字";
+  if (type === "wechat" && cleanValue.length < 4) return "微信号至少需要 4 个字符";
   return null;
 }
 
@@ -478,6 +570,13 @@ function preferenceRow(key) {
   return `<div class="preference-row"><b>${label}</b><div>${controls}</div></div>`;
 }
 
+function fieldErrorMarkup(fieldKey) {
+  const message = state.fieldErrors[fieldKey];
+  return message
+    ? `<p class="field-error" id="field-error-${escapeAttribute(fieldKey)}">${escapeText(message)}</p>`
+    : "";
+}
+
 function renterClarify() {
   const parsed = state.parsedDemand || parseDemandText(state.draftText, todayInShanghai());
   const tags = parsedDemandTags(parsed);
@@ -489,7 +588,7 @@ function renterClarify() {
   const questionMarkup = questions.length
     ? `<div class="clarification-prompts">${questions.map((question) => `<p data-field-key="${escapeAttribute(question.fieldKey)}">${escapeText(question.question)}</p>`).join("")}</div>`
     : "<b>再确认一下</b>";
-  const field = (key, label, body) => `<div class="dialogue-field ${missing.has(key) ? "is-missing" : ""}"><b>${label}</b><div>${body}</div></div>`;
+  const field = (key, label, body) => `<div class="dialogue-field ${missing.has(key) ? "is-missing" : ""} ${state.fieldErrors[key] ? "has-error" : ""}" data-field-group="${escapeAttribute(key)}"><b>${label}</b><div>${body}</div>${fieldErrorMarkup(key)}</div>`;
   return `<section class="flow-screen">
     ${flowHeader("和找房分身确认")}
     <div class="rental-chat">
@@ -989,6 +1088,7 @@ async function shareCandidate(candidate) {
 
   try {
     await navigator.share(shareData);
+    queueModalFocusRestore();
     state.sheet = null;
     showToast("已打开系统分享");
   } catch (error) {
@@ -1165,7 +1265,7 @@ function reportResultSheet() {
 }
 
 function contactSheet() {
-  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet contact-settings-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>设置联系方式</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><p>只在双方确认同一版条款后，通过服务端临时授权给对方。</p><label><span>类型</span><select data-contact-type><option value="wechat" ${state.contactProfile?.type === "wechat" ? "selected" : ""}>微信</option><option value="phone" ${state.contactProfile?.type === "phone" ? "selected" : ""}>手机</option><option value="email" ${state.contactProfile?.type === "email" ? "selected" : ""}>邮箱</option></select></label><label><span>新联系方式</span><input data-contact-value autocomplete="off" maxlength="254" placeholder="输入后将加密保存" /></label>${state.contactProfile ? `<small>当前已保存：${escapeText(state.contactProfile.maskedValue)}</small>` : ""}<button class="primary-button" data-action="save-contact" ${state.contactSubmitting ? "disabled" : ""}>${state.contactSubmitting ? "正在加密保存…" : "加密保存"}</button></section></div>`;
+  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet contact-settings-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>设置联系方式</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><p>只在双方确认同一版条款后，通过服务端临时授权给对方。</p><label><span>类型</span><select data-contact-type><option value="wechat" ${state.contactProfile?.type === "wechat" ? "selected" : ""}>微信</option><option value="phone" ${state.contactProfile?.type === "phone" ? "selected" : ""}>手机</option><option value="email" ${state.contactProfile?.type === "email" ? "selected" : ""}>邮箱</option></select></label><label><span>新联系方式</span><input data-input="contact-value" data-contact-value autocomplete="off" maxlength="254" value="${escapeAttribute(state.contactDraft || "")}" placeholder="输入后将加密保存" /></label>${fieldErrorMarkup("contact")}${state.contactProfile ? `<small>当前已保存：${escapeText(state.contactProfile.maskedValue)}</small>` : ""}<button class="primary-button" data-action="save-contact" ${state.contactSubmitting ? "disabled" : ""}>${state.contactSubmitting ? "正在加密保存…" : "加密保存"}</button></section></div>`;
 }
 
 function activeSheet() {
@@ -1180,10 +1280,120 @@ function activeSheet() {
   return "";
 }
 
+function connectionBar() {
+  const { phase, message, lastSuccessAt } = state.connection;
+  const labels = {
+    connecting: "正在连接",
+    online: "连接正常",
+    degraded: "安全模式",
+    offline: "连接中断"
+  };
+  const lastSuccess = lastSuccessAt
+    ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }).format(new Date(lastSuccessAt))
+    : "尚未连接";
+  const detail = phase === "online" ? `最近同步 ${lastSuccess}` : message;
+  return `<aside class="connection-bar is-${phase}" data-connection-phase="${phase}" aria-label="服务连接状态"><span class="connection-dot" aria-hidden="true"></span><div><b>${labels[phase]}</b><small>${escapeText(detail)}</small></div>${phase === "offline" ? '<button data-action="retry-connection">重试</button>' : ""}</aside>`;
+}
+
+function decorateFocusKeys() {
+  const used = new Map();
+  for (const element of app.querySelectorAll("button, a[href], input, select, textarea, [tabindex]")) {
+    if (element.dataset.focusKey) continue;
+    const base = element.id
+      ? `id:${element.id}`
+      : element.dataset.input
+        ? `input:${element.dataset.input}`
+        : element.dataset.action
+          ? `action:${element.dataset.action}:${element.dataset.key || ""}:${element.dataset.value || element.dataset.id || ""}`
+          : element.name
+            ? `name:${element.name}`
+            : `control:${element.tagName.toLowerCase()}`;
+    const count = used.get(base) || 0;
+    used.set(base, count + 1);
+    element.dataset.focusKey = count ? `${base}:${count}` : base;
+  }
+}
+
+function applyFieldErrorAttributes() {
+  const controls = {
+    location: ['[data-action="open-location"]'],
+    budget: ['[data-input="budget-min"]', '[data-input="budget-max"]'],
+    moveIn: ['[data-input="move-in-from"]', '[data-input="move-in-to"]'],
+    commute: ['[data-input="commute-range"]'],
+    lease: ['[data-action="set-answer"][data-key="leaseMonths"]'],
+    contact: ['[data-contact-value]']
+  };
+  for (const [fieldKey, selectors] of Object.entries(controls)) {
+    const message = state.fieldErrors[fieldKey];
+    for (const selector of selectors) {
+      for (const control of app.querySelectorAll(selector)) {
+        control.setAttribute("aria-invalid", message ? "true" : "false");
+        if (message) control.setAttribute("aria-describedby", `field-error-${fieldKey}`);
+        else control.removeAttribute("aria-describedby");
+      }
+    }
+  }
+}
+
+function focusFirstInvalidField() {
+  const order = ["location", "budget", "moveIn", "commute", "lease", "contact"];
+  const selector = {
+    location: '[data-action="open-location"]',
+    budget: '[data-input="budget-min"]',
+    moveIn: '[data-input="move-in-from"]',
+    commute: '[data-input="commute-range"]',
+    lease: '[data-action="set-answer"][data-key="leaseMonths"]',
+    contact: "[data-contact-value]"
+  }[order.find((key) => state.fieldErrors[key])];
+  app.querySelector(selector)?.focus({ preventScroll: false });
+}
+
+function prepareActiveDialog(focusKeyBeforeRender, sheetBeforeRender) {
+  const modal = app.querySelector(".modal-scrim > .bottom-sheet, .map-modal > .map-sheet");
+  if (!modal) return;
+  const title = modal.querySelector("h2");
+  if (title) {
+    title.id = `dialog-title-${state.sheet}`;
+    modal.setAttribute("aria-labelledby", title.id);
+  }
+  const sameDialog = state.sheet === sheetBeforeRender;
+  const restoredControl = sameDialog
+    ? [...modal.querySelectorAll("[data-focus-key]")].find((element) => element.dataset.focusKey === focusKeyBeforeRender)
+    : null;
+  const initialFocus = restoredControl
+    || (state.sheet === "location" ? modal.querySelector('[data-input="location-search"]') : null)
+    || modal.querySelector("button, input, select, textarea")
+    || modal;
+  focusManager.openModal({
+    modal,
+    trigger: modalTriggerFocusKey ? { dataset: { focusKey: modalTriggerFocusKey } } : null,
+    initialFocus,
+    background: [app.querySelector("#app-main"), app.querySelector(".tab-dock")]
+  });
+}
+
+function rememberModalTrigger(trigger) {
+  modalTriggerFocusKey = focusManager.elementFocusKey(trigger);
+}
+
+function queueModalFocusRestore() {
+  pendingFocusRestoreKey = modalTriggerFocusKey;
+  modalTriggerFocusKey = null;
+}
+
+function closeActiveSheet() {
+  queueModalFocusRestore();
+  state.sheet = null;
+  state.contactSubmitting = false;
+  render();
+}
+
 function render() {
   syncExpiredTask();
   document.body.dataset.motion = state.motion;
   const previousScrollTop = app.querySelector("#app-main")?.scrollTop || 0;
+  const focusKeyBeforeRender = focusManager.elementFocusKey(document.activeElement);
+  const sheetBeforeRender = lastRenderedSheet;
   const immersive = Boolean(state.flow) || state.page !== "root";
   const viewKey = [state.tab, state.flow, state.renterStage, state.supplyStage, state.page, state.activeCandidateId, state.sheet].join(":");
   const content = state.flow === "renter"
@@ -1204,10 +1414,23 @@ function render() {
   const demoBanner = state.demoBanner
     ? '<div class="demo-mode-banner" role="status">演示模式 · 当前候选包含测试语料</div>'
     : "";
-  app.innerHTML = `<div class="device"><div class="app-shell">${statusBar()}${demoBanner}<main id="app-main" class="screen-scroll ${immersive ? "immersive" : ""}" tabindex="-1">${content}</main>${immersive ? "" : tabBar()}${activeSheet()}${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}</div></div>`;
+  app.innerHTML = `<div class="device"><div class="app-shell">${statusBar()}${demoBanner}${connectionBar()}<main id="app-main" class="screen-scroll ${immersive ? "immersive" : ""}" tabindex="-1">${content}</main>${immersive ? "" : tabBar()}${activeSheet()}${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}</div></div>`;
+  decorateFocusKeys();
+  applyFieldErrorAttributes();
+  prepareActiveDialog(focusKeyBeforeRender, sheetBeforeRender);
   const main = app.querySelector("#app-main");
   if (main) main.scrollTop = viewKey === lastViewKey ? previousScrollTop : 0;
   lastViewKey = viewKey;
+  lastRenderedSheet = state.sheet;
+  if (!state.sheet && pendingFocusRestoreKey) {
+    const restoreKey = pendingFocusRestoreKey;
+    pendingFocusRestoreKey = null;
+    window.requestAnimationFrame(() => focusManager.restoreFocus(restoreKey, app));
+  }
+  if (pendingInvalidFocus) {
+    pendingInvalidFocus = false;
+    window.requestAnimationFrame(focusFirstInvalidField);
+  }
   void mountBearAgents(app);
   persistProductState();
 }
@@ -1267,16 +1490,17 @@ async function beginIntake() {
       const response = await parseRenterWithServer(state.draftText, todayInShanghai());
       state.parsedDemand = response.parsed;
       state.intakeProvider = response.provider;
-      state.syncError = response.warning || null;
+      if (response.warning) markConnectionDegraded(response.warning);
+      else markConnectionSuccess();
     } else {
       state.parsedDemand = parseDemandText(state.selectedLocations.join("、"), todayInShanghai());
       state.intakeProvider = "deterministic";
-      state.syncError = null;
+      markConnectionSuccess();
     }
   } catch (error) {
     state.parsedDemand = parseDemandText(state.draftText, todayInShanghai());
     state.intakeProvider = "deterministic";
-    state.syncError = error.message;
+    markConnectionDegraded(error.message || "AI 暂时不可用，已使用确定性解析");
   }
   state.intakeLoading = false;
   state.answers = seedAnswersFromParsed(state.parsedDemand, defaultAnswers());
@@ -1302,11 +1526,12 @@ async function beginSupplyIntake() {
     const response = await parseSupplyWithServer(state.supplyText, todayInShanghai());
     state.parsedSupply = response.parsed;
     state.intakeProvider = response.provider;
-    state.syncError = response.warning || null;
+    if (response.warning) markConnectionDegraded(response.warning);
+    else markConnectionSuccess();
   } catch (error) {
     state.parsedSupply = parseSupplyText(state.supplyText, todayInShanghai());
     state.intakeProvider = "deterministic";
-    state.syncError = error.message;
+    markConnectionDegraded(error.message || "AI 暂时不可用，已使用确定性解析");
   }
   state.intakeLoading = false;
   seedSupplyFromParsed(state.parsedSupply);
@@ -1351,6 +1576,7 @@ async function refreshTaskList({ renderNow = false } = {}) {
     }
   }));
   state.tasks = summaries;
+  markConnectionSuccess();
   if (renderNow) render();
   return summaries;
 }
@@ -1403,8 +1629,7 @@ function applyServerSnapshot(snapshot, { renderNow = true } = {}) {
   const result = { scanned: snapshot.task.scanned, candidates: snapshot.candidates || [], audit: snapshot.events || [] };
   if (snapshot.task.kind === "renter") state.result = result;
   else state.supplyResult = result;
-  state.serverReady = true;
-  state.syncError = null;
+  markConnectionSuccess();
   if (renderNow && visualChanged) render();
 }
 
@@ -1426,7 +1651,7 @@ function startTaskPolling(taskId) {
           || previousCase.updatedAt !== matchCase.updatedAt) render();
       }
     } catch (error) {
-      state.syncError = error.message;
+      markConnectionOffline(error);
       state.revealedContact = null;
       render();
     } finally {
@@ -1437,12 +1662,15 @@ function startTaskPolling(taskId) {
 }
 
 async function initializeServerState() {
+  recoveryExpected ||= ["offline", "degraded"].includes(state.connection.phase);
+  state.connection = { ...state.connection, phase: "connecting", message: "正在连接服务" };
+  render();
   try {
     const health = await getServerHealth();
     state.marketMode = health.marketMode || "real";
     state.demoBanner = Boolean(health.demoBanner);
     await ensureServerSession();
-    state.serverReady = true;
+    markConnectionSuccess();
     const profileContact = await getProfileContact();
     state.contactProfile = profileContact.contact;
     const tasks = await refreshTaskList();
@@ -1487,8 +1715,7 @@ async function initializeServerState() {
       render();
     }
   } catch (error) {
-    state.serverReady = false;
-    state.syncError = error.message;
+    markConnectionOffline(error);
     render();
   }
 }
@@ -1535,6 +1762,7 @@ async function selectServerTask(taskId, { matchCaseId = null, navigate = true, r
     }
     return true;
   } catch (error) {
+    if (error.status !== 404) markConnectionOffline(error);
     await showTaskCenter(error.status === 404 ? "该任务不存在，或不属于当前账号。" : error.message, { replace: true });
     return false;
   }
@@ -1553,6 +1781,7 @@ async function showTaskCenter(notice = "", { replace = false } = {}) {
     await refreshTaskList();
   } catch (error) {
     state.taskCenterError = error.message || "任务列表读取失败";
+    markConnectionOffline(error);
   } finally {
     state.taskCenterLoading = false;
     render();
@@ -1626,25 +1855,15 @@ function startMatching(kind, remoteTask = null) {
   state.tab = "match";
   state.page = "root";
   state.flow = null;
-  const checkpoints = [
-    [600, 0.25, 0],
-    [1500, 0.56, 0],
-    [2700, 0.84, Math.min(1, result.candidates.length)],
-    [4100, 1, result.candidates.length]
-  ];
-  checkpoints.forEach(([delay, ratio, suitable], index) => {
-    matchTimers.push(window.setTimeout(() => {
-      state.task.phaseIndex = index;
-      state.task.scanned = Math.min(result.scanned, Math.max(1, Math.round(result.scanned * ratio)));
-      state.task.suitable = suitable;
-      state.task.delivered = index === checkpoints.length - 1;
-      if (state.task.delivered) {
-        commitCompletedTask(result);
-        if (state.task.remoteId) startTaskPolling(state.task.remoteId);
-      }
-      render();
-    }, delay));
-  });
+  // The server response is the completed first run. Do not invent progress
+  // percentages or a theatrical delay; ongoing work is represented by polling.
+  state.task.phaseIndex = 3;
+  state.task.scanned = result.scanned;
+  state.task.suitable = result.candidates.length;
+  state.task.delivered = true;
+  commitCompletedTask(result);
+  if (state.task.remoteId) startTaskPolling(state.task.remoteId);
+  state.tab = "results";
   render();
 }
 
@@ -1713,6 +1932,17 @@ app.addEventListener("input", (event) => {
   if (key === "move-in-from") confirmRenterAnswer("moveInFrom", input.value);
   if (key === "move-in-to") confirmRenterAnswer("moveInTo", input.value);
   if (key === "commute-range") { confirmRenterAnswer("commute", input.value); const output = app.querySelector("#commute-value"); if (output) output.textContent = `${input.value} 分钟`; }
+  if (key === "contact-value") {
+    state.contactDraft = input.value;
+    const type = app.querySelector("[data-contact-type]")?.value || "wechat";
+    const message = validateContactValue(type, input.value);
+    if (message && state.fieldErrors.contact) state.fieldErrors.contact = message;
+    else if (!message) {
+      delete state.fieldErrors.contact;
+      app.querySelector("#field-error-contact")?.remove();
+    }
+    applyFieldErrorAttributes();
+  }
   if (key === "supply-title") state.supplyDraft.title = input.value;
   if (key === "supply-address") state.supplyDraft.address = input.value;
   if (key === "supply-rent") {
@@ -1738,6 +1968,17 @@ app.addEventListener("input", (event) => {
 });
 
 app.addEventListener("change", async (event) => {
+  const contactType = event.target.closest("[data-contact-type]");
+  if (contactType) {
+    const contactInput = app.querySelector("[data-contact-value]");
+    if (state.fieldErrors.contact && contactInput) {
+      const message = validateContactValue(contactType.value, contactInput.value);
+      if (message) state.fieldErrors.contact = message;
+      else delete state.fieldErrors.contact;
+      render();
+    }
+    return;
+  }
   const evidenceInput = event.target.closest("[data-evidence-file]");
   if (evidenceInput?.files?.length) {
     const kind = evidenceInput.dataset.evidenceFile;
@@ -1774,6 +2015,7 @@ app.addEventListener("change", async (event) => {
     state.supplyDraft.verification.livePhotoChallenge = uploaded;
     confirmSupplyField("verification.livePhotoChallenge", uploaded);
     state.evidenceUploading = null;
+    queueModalFocusRestore();
     state.sheet = null;
     showToast(uploaded.displayLabel || "已上传，待审核");
   } catch (error) {
@@ -1793,6 +2035,15 @@ app.addEventListener("error", (event) => {
 }, true);
 
 app.addEventListener("keydown", (event) => {
+  const activeDialog = app.querySelector('.bottom-sheet[aria-modal="true"], .map-sheet[aria-modal="true"]');
+  if (activeDialog) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeActiveSheet();
+      return;
+    }
+    if (event.key === "Tab") focusManager.trapTab(event, activeDialog);
+  }
   const draft = event.target.closest('[data-input="draft-text"]');
   if (draft && event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault();
@@ -1821,7 +2072,11 @@ app.addEventListener("click", async (event) => {
   if (target.dataset.action === "close-sheet-from-scrim" && event.target !== target) return;
   const action = target.dataset.action;
   const value = target.dataset.value;
+  if (["open-create", "task-center-create", "open-location", "open-photo-source", "open-share", "open-report", "open-lab", "open-contact-settings", "reveal-contact"].includes(action) && !state.sheet) {
+    rememberModalTrigger(target);
+  }
   switch (action) {
+    case "retry-connection": await initializeServerState(); break;
     case "switch-tab":
       state.tab = value;
       state.page = "root";
@@ -1868,9 +2123,9 @@ app.addEventListener("click", async (event) => {
     }
     case "open-create": state.sheet = "create"; render(); break;
     case "close-sheet":
-    case "close-sheet-from-scrim": state.sheet = null; state.contactSubmitting = false; render(); break;
-    case "create-renter": state.sheet = null; state.flow = "renter"; state.renterStage = "input"; state.renterFieldStates = {}; state.renterInputVersion = 0; render(); break;
-    case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyFieldStates = {}; state.supplyInputVersion = 0; state.supplyEvidenceRefs = {}; state.photoPreviews = []; state.publicPhotoConsent = false; render(); break;
+    case "close-sheet-from-scrim": closeActiveSheet(); break;
+    case "create-renter": modalTriggerFocusKey = null; state.sheet = null; state.flow = "renter"; state.renterStage = "input"; state.renterFieldStates = {}; state.renterInputVersion = 0; state.fieldErrors = {}; render(); break;
+    case "create-supply": modalTriggerFocusKey = null; state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyFieldStates = {}; state.supplyInputVersion = 0; state.supplyEvidenceRefs = {}; state.photoPreviews = []; state.publicPhotoConsent = false; state.fieldErrors = {}; render(); break;
     case "cancel-flow": state.flow = null; state.page = "root"; render(); break;
     case "voice-input": startVoiceInput(); break;
     case "home-intake": beginIntake(); break;
@@ -1891,9 +2146,23 @@ app.addEventListener("click", async (event) => {
       navigator.geolocation.getCurrentPosition(() => { state.locateState = "done"; render(); }, () => { state.locateState = "idle"; showToast("没有获得定位权限"); }, { enableHighAccuracy: true, timeout: 8000 });
       break;
     }
-    case "confirm-location": confirmRenterAnswer("location", state.selectedLocations.join(" / ")); state.sheet = null; render(); break;
+    case "confirm-location": confirmRenterAnswer("location", state.selectedLocations.join(" / ")); closeActiveSheet(); break;
     case "set-answer": confirmRenterAnswer(target.dataset.key, value); render(); break;
-    case "review-mandate": { const error = validateDemandAnswers(); if (error) showToast(error); else { state.renterStage = "review"; render(); } break; }
+    case "review-mandate": {
+      const errors = validateDemandFields();
+      state.fieldErrors = { ...state.fieldErrors, ...errors };
+      for (const key of ["location", "budget", "moveIn", "commute", "lease"]) {
+        if (!errors[key]) delete state.fieldErrors[key];
+      }
+      if (Object.keys(errors).length) {
+        pendingInvalidFocus = true;
+        render();
+      } else {
+        state.renterStage = "review";
+        render();
+      }
+      break;
+    }
     case "toggle-consent": state.consent = target.checked; app.querySelector('[data-action="publish-mandate"]')?.toggleAttribute("disabled", !state.consent); break;
     case "publish-mandate": {
       if (!state.consent) { showToast("请先确认需求"); break; }
@@ -2075,7 +2344,7 @@ app.addEventListener("click", async (event) => {
     case "open-share": state.sheet = "share"; render(); break;
     case "copy-listing": {
       const candidate = activeCandidate();
-      if (candidate) { state.sheet = null; await copyText(listingShareText(candidate), "房源摘要已复制"); }
+      if (candidate) { queueModalFocusRestore(); state.sheet = null; await copyText(listingShareText(candidate), "房源摘要已复制"); }
       break;
     }
     case "share-listing": { const candidate = activeCandidate(); if (candidate) await shareCandidate(candidate); break; }
@@ -2098,12 +2367,21 @@ app.addEventListener("click", async (event) => {
     case "save-contact": {
       const type = app.querySelector("[data-contact-type]")?.value;
       const contactValue = app.querySelector("[data-contact-value]")?.value;
-      if (!contactValue?.trim()) { showToast("请先填写联系方式"); break; }
+      const contactError = validateContactValue(type, contactValue);
+      if (contactError) {
+        state.fieldErrors.contact = contactError;
+        pendingInvalidFocus = true;
+        render();
+        break;
+      }
       target.disabled = true;
       state.contactSubmitting = true;
       try {
         const response = await setProfileContact(type, contactValue);
         state.contactProfile = response.contact;
+        state.contactDraft = "";
+        delete state.fieldErrors.contact;
+        queueModalFocusRestore();
         state.sheet = null;
         showToast("联系方式已加密保存");
       } catch (error) {
