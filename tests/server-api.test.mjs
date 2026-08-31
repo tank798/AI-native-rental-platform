@@ -157,6 +157,8 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   });
   assert.equal(supplyCreated.response.status, 201);
   assert.equal(supplyCreated.payload.candidates.length, 1);
+  assert.ok(supplyCreated.payload.candidates[0].matchCaseId);
+  assert.equal(supplyCreated.payload.candidates[0].matchCaseStatus, "eligible");
   assert.match(supplyCreated.payload.candidates[0].displayAlias, /^租客 /);
   assert.equal(supplyCreated.payload.candidates[0].tenant.mandate.budget, undefined);
   assert.equal(supplyCreated.payload.candidates[0].tenant.mandate.maxCommuteMinutes, 25);
@@ -166,9 +168,13 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   const renterUpdated = await request(baseUrl, `/api/tasks/${renterCreated.payload.task.id}`, { cookie: renterSession.cookie });
   assert.equal(renterUpdated.response.status, 200);
   assert.equal(renterUpdated.payload.candidates.length, 1);
+  assert.equal(renterUpdated.payload.candidates[0].matchCaseId, supplyCreated.payload.candidates[0].matchCaseId);
   assert.equal(renterUpdated.payload.candidates[0].listing.minRent, undefined);
   assert.doesNotMatch(renterUpdated.payload.candidates[0].listing.addressHint, /海港大道/);
   assert.ok(renterUpdated.payload.task.runCount >= 2);
+  const persistedCase = app.matching.matchCaseRepository.get(supplyCreated.payload.candidates[0].matchCaseId);
+  assert.equal(persistedCase.status, "terms_ready");
+  assert.equal(persistedCase.renterInputVersion, 7);
 
   const denied = await request(baseUrl, `/api/tasks/${renterCreated.payload.task.id}`, { cookie: supplySession.cookie });
   assert.equal(denied.response.status, 404);

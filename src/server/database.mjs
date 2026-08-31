@@ -168,9 +168,25 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
     statements.insertEvent.run(taskId, type, JSON.stringify(payload || {}), at);
   }
 
+  function transaction(work) {
+    const nested = Boolean(db.isTransaction);
+    const savepoint = `sp_${randomUUID().replaceAll("-", "")}`;
+    db.exec(nested ? `SAVEPOINT ${savepoint}` : "BEGIN IMMEDIATE");
+    try {
+      const result = work();
+      db.exec(nested ? `RELEASE SAVEPOINT ${savepoint}` : "COMMIT");
+      return result;
+    } catch (error) {
+      db.exec(nested ? `ROLLBACK TO SAVEPOINT ${savepoint}` : "ROLLBACK");
+      if (nested) db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      throw error;
+    }
+  }
+
   return {
     raw: db,
     migrationBackupPath: prepared.backupPath,
+    transaction,
 
     createProfile({ id, tokenHash }) {
       statements.createProfile.run(id, tokenHash, now());

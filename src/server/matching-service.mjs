@@ -5,6 +5,9 @@ import {
   matchSupplyDraft
 } from "../simulation-engine.mjs";
 import { createClock } from "../clock.mjs";
+import { createMatchCaseRepository } from "./match-case-repository.mjs";
+import { createMatchCaseService } from "./match-case-service.mjs";
+import { createTaskRepository } from "./task-repository.mjs";
 import { normalizeMarketMode } from "./runtime-config.mjs";
 
 function renterLabel(task) {
@@ -65,6 +68,9 @@ function candidateCounterparty(candidate, fallbackPrefix) {
  */
 export function createMatchingService(repository, { marketMode = "real", clock = createClock() } = {}) {
   const normalizedMarketMode = normalizeMarketMode(marketMode);
+  const taskRepository = createTaskRepository({ database: repository, clock });
+  const matchCaseRepository = createMatchCaseRepository({ database: repository, clock });
+  const matchCases = createMatchCaseService({ taskRepository, matchCaseRepository, clock });
 
   function renterPool(task) {
     const userListings = repository.listOppositeTasks("renter", task.ownerId).map((supplyTask, index) => {
@@ -129,7 +135,13 @@ export function createMatchingService(repository, { marketMode = "real", clock =
 
   function processTask(taskId) {
     const task = repository.getTask(taskId);
-    if (!task || task.status !== "active") return task;
+    if (!task) return task;
+    if (normalizedMarketMode === "real") {
+      matchCases.processTask(taskId);
+      return repository.getTask(taskId);
+    }
+    matchCases.processTask(taskId);
+    if (task.status !== "active") return repository.getTask(taskId);
     return task.kind === "renter" ? processRenter(task) : processSupply(task);
   }
 
@@ -137,6 +149,10 @@ export function createMatchingService(repository, { marketMode = "real", clock =
     repository.expireDueTasks();
     const createdTask = repository.getTask(taskId);
     if (!createdTask) return null;
+    if (normalizedMarketMode === "real") {
+      matchCases.processTask(taskId);
+      return repository.getTask(taskId);
+    }
     processTask(taskId);
     const oppositeKind = createdTask.kind === "renter" ? "supply" : "renter";
     repository.listActiveTasks(oppositeKind)
@@ -147,6 +163,10 @@ export function createMatchingService(repository, { marketMode = "real", clock =
 
   function processAllActive() {
     repository.expireDueTasks();
+    if (normalizedMarketMode === "real") {
+      return matchCases.processAllActive().taskCount;
+    }
+    matchCases.processAllActive();
     const tasks = repository.listActiveTasks();
     tasks.forEach((task) => processTask(task.id));
     return tasks.length;
@@ -164,6 +184,9 @@ export function createMatchingService(repository, { marketMode = "real", clock =
 
   return {
     marketMode: normalizedMarketMode,
+    matchCases,
+    matchCaseRepository,
+    taskRepository,
     processTask,
     processAfterTaskCreated,
     processAllActive,

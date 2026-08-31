@@ -39,6 +39,7 @@ test("默认真实市场只扫描数据库中的真实对手任务", async (t) =
   assert.equal(matching.marketMode, "real");
   assert.equal(snapshot.task.scanned, 0);
   assert.deepEqual(snapshot.candidates, []);
+  assert.equal(matching.matchCaseRepository.list().length, 0);
 });
 
 test("显式演示模式会注入语料并把每个候选标记为 fixture", async (t) => {
@@ -51,6 +52,7 @@ test("显式演示模式会注入语料并把每个候选标记为 fixture", asy
   assert.equal(snapshot.task.scanned, 100);
   assert.ok(snapshot.candidates.length > 0);
   assert.equal(snapshot.candidates.every((candidate) => candidate.counterpartyType === "fixture"), true);
+  assert.equal(matching.matchCaseRepository.list().length, 0);
 });
 
 test("持续匹配会把新房源增量推送到租客，也把新租客推送到房东", async (t) => {
@@ -101,18 +103,27 @@ test("持续匹配会把新房源增量推送到租客，也把新租客推送�
 
   const renterCandidates = matching.snapshot(renterTask.id).candidates;
   assert.equal(renterCandidates.length, 1);
+  assert.ok(renterCandidates[0].matchCaseId);
   assert.equal(renterCandidates[0].listing.minRent, undefined);
   assert.doesNotMatch(renterCandidates[0].listing.addressHint, /海港大道/);
 
   const supplyCandidates = matching.snapshot(supplyTask.id).candidates;
   assert.equal(supplyCandidates.length, 1);
+  assert.equal(supplyCandidates[0].matchCaseId, renterCandidates[0].matchCaseId);
   assert.equal(supplyCandidates[0].tenant.mandate.budget, undefined);
   assert.match(supplyCandidates[0].displayAlias, /^租客 /);
+
+  const matchCases = matching.matchCaseRepository.list();
+  assert.equal(matchCases.length, 1);
+  assert.equal(matchCases[0].status, "terms_ready");
+  assert.equal(matchCases[0].renterTaskId, renterTask.id);
+  assert.equal(matchCases[0].supplyTaskId, supplyTask.id);
 
   const beforeVersion = repository.getTask(renterTask.id).candidateVersion;
   matching.processAllActive();
   assert.ok(repository.getTask(renterTask.id).runCount >= 2);
   assert.equal(repository.getTask(renterTask.id).candidateVersion, beforeVersion);
+  assert.equal(matching.matchCaseRepository.listEvents(matchCases[0].id).filter((event) => event.type === "case_created").length, 1);
 });
 
 test("持续扫描会先停止已经过期的任务", async (t) => {

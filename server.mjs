@@ -409,7 +409,7 @@ export function createRentalServer(options = {}) {
         const body = await readJson(request);
         if (!["active", "paused", "closed"].includes(body.status)) throw Object.assign(new Error("任务状态无效"), { status: 422 });
         const updated = repository.setTaskStatus(task.id, session.id, body.status);
-        if (body.status === "active") matching.processTask(task.id);
+        matching.processTask(task.id);
         return json(response, 200, { task: publicTask(updated) });
       }
     }
