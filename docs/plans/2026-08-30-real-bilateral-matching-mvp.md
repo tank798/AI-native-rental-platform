@@ -2101,6 +2101,8 @@ git commit -m "feat: drive matching with transactional outbox"
 
 **目标：** 让多个持续任务可管理，候选/案例详情可刷新和前进后退，并用真实浏览器锁住关键安全与业务回归。
 
+**实施状态（2026-08-31）：已完成。** 任务中心、同会话深链、纯渲染模块、隔离 Playwright 服务和 5 条关键浏览器用例已经落地；153 项 Node 测试、静态检查和 5 条 Playwright 关键场景全部通过。
+
 **文件：**
 
 - Create: `playwright.config.mjs`

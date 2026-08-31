@@ -1,4 +1,4 @@
-const CACHE_NAME = "zhunaer-app-shell-v6";
+const CACHE_NAME = "zhunaer-app-shell-v7";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -16,6 +16,9 @@ const APP_SHELL = [
   "./src/simulation-engine.mjs",
   "./src/api-client.mjs",
   "./src/ui/safe-markup.mjs",
+  "./src/ui/router.mjs",
+  "./src/ui/task-center.mjs",
+  "./src/ui/match-detail.mjs",
   "./assets/app-icon.svg",
   "./assets/bear-agent.svg",
   "./assets/bear-agent-anchor.png",

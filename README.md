@@ -114,6 +114,8 @@ flowchart LR
 ### 双边持续匹配
 
 - 找房任务扫描房源，出租任务反向扫描租客。
+- “我的任务”以服务端列表为事实源，可在多个找房和出租任务之间切换，并暂停或恢复持续匹配。
+- 任务与匹配详情使用同会话深链；刷新、浏览器返回和前进会恢复选中状态，非法或越权链接回退到任务中心且不泄露内容。
 - 新供给到达后立即更新相关租客任务。
 - 新租客到达后立即更新相关出租任务。
 - 任务与 `task.match_requested` 在同一事务提交；单进程 worker 只评估城市、位置和价格粗筛后的受影响任务对。
@@ -440,9 +442,10 @@ SQLite 当前包含以下核心表：
 ```bash
 npm test
 npm run check
+npm run test:e2e
 ```
 
-当前测试共 147 项，覆盖：
+当前 Node 测试共 153 项，另有 5 条 Playwright 关键浏览器场景。它们覆盖：
 
 - 租客与出租自然语言解析；
 - Qwen 结果不能覆盖规则明确事实；
@@ -455,11 +458,13 @@ npm run check
 - 任务过期与续期；
 - 风控、硬筛、议价和候选选择；
 - 私密预算和底价不得进入公开结果。
+- 用户修改 AI 预填后以最终确认值发布、恶意标题纯文本渲染、多任务切换、案例深链和双向确认联系人门禁。
 
 在禁止监听本机端口的沙箱中，端口相关 HTTP 测试会自动跳过；在正常本机环境中可直接运行完整服务端回归：
 
 ```bash
 node --test tests/server-api.test.mjs tests/server-clarification-api.test.mjs tests/server-match-case-api.test.mjs tests/server-media-api.test.mjs tests/server-rate-limit.test.mjs tests/server-security.test.mjs
+npm run test:e2e
 ```
 
 ### 100 × 100 测试市场
@@ -512,11 +517,13 @@ npm run eval:ai
 │   ├── api-client.mjs              # 浏览器 API 客户端
 │   ├── app.mjs                     # 产品交互与状态
 │   ├── app.css                     # 视觉与响应式样式
+│   ├── ui/                          # 安全渲染、任务中心、案例详情与路由
 │   ├── demand-parser.mjs           # 租客需求解析
 │   ├── supply-parser.mjs           # 房源解析与风险识别
 │   ├── marketplace-corpus.mjs      # 双边测试市场
 │   └── simulation-engine.mjs       # 匹配、议价和风控规则
 ├── tests/                          # 自动化测试
+├── playwright.config.mjs           # 隔离浏览器回归配置
 ├── .env.example                    # 无密钥的配置模板
 ├── index.html                      # Web 入口
 ├── server.mjs                      # Node HTTP 服务入口

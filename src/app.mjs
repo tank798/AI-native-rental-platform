@@ -36,14 +36,19 @@ import {
   getProfileContact,
   getServerHealth,
   getServerTask,
+  listTaskMatches,
   listServerTasks,
   parseRenterWithServer,
   parseSupplyWithServer,
   setProfileContact,
+  setServerTaskStatus,
   uploadListingMedia,
   uploadEvidenceFile
 } from "./api-client.mjs";
 import { escapeAttribute, escapeText } from "./ui/safe-markup.mjs";
+import { renderMatchDetail } from "./ui/match-detail.mjs";
+import { parseRoute, pushRoute, replaceRoute } from "./ui/router.mjs";
+import { renderTaskCenter } from "./ui/task-center.mjs";
 
 const app = document.querySelector("#app");
 const clientClock = createClock();
@@ -199,6 +204,11 @@ function initialProductState() {
     photoPreviews: [],
     publicPhotoConsent: false,
     task: null,
+    tasks: [],
+    activeTaskId: null,
+    taskCenterLoading: false,
+    taskCenterError: null,
+    routeNotice: null,
     result: null,
     supplyResult: null,
     activeCandidateId: null,
@@ -230,56 +240,18 @@ function restoreProductState() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     if (!saved || typeof saved !== "object") return fallback;
-    return {
-      ...fallback,
-      ...saved,
-      flow: null,
-      page: "root",
-      sheet: null,
-      listening: false,
-      revealedContact: null,
-      contactLoading: false,
-      contactSubmitting: false,
-      photoPreviews: fallback.photoPreviews,
-      publicPhotoConsent: false,
-      answers: { ...fallback.answers, ...(saved.answers || {}) },
-      supplyDraft: {
-        ...fallback.supplyDraft,
-        ...(saved.supplyDraft || {}),
-        fees: { ...fallback.supplyDraft.fees, ...(saved.supplyDraft?.fees || {}) },
-        verification: { ...fallback.supplyDraft.verification, ...(saved.supplyDraft?.verification || {}) },
-        facilities: { ...fallback.supplyDraft.facilities, ...(saved.supplyDraft?.facilities || {}) }
-      },
-      stats: { ...fallback.stats, ...(saved.stats || {}) },
-      settings: { ...fallback.settings, ...(saved.settings || {}) }
-    };
+    const activeTaskId = typeof saved.activeTaskId === "string" ? saved.activeTaskId : null;
+    return { ...fallback, activeTaskId };
   } catch {
     return fallback;
   }
 }
 
-function compactResult(result) {
-  if (!result) return null;
-  const { eligible, excluded, quarantined, ...persisted } = result;
-  return persisted;
-}
-
 function persistProductState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ...state,
-      flow: null,
-      sheet: null,
-      listening: false,
-      toast: null,
-      revealedContact: undefined,
-      contactLoading: false,
-      contactSubmitting: false,
-      photoPreviews: undefined,
-      publicPhotoConsent: false,
-      result: compactResult(state.result),
-      supplyResult: compactResult(state.supplyResult)
-    }));
+    // The server is authoritative; local storage remembers only which owned
+    // task the user last focused and never caches task or candidate payloads.
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeTaskId: state.activeTaskId || null }));
   } catch {
     // Storage can be unavailable in strict privacy modes; the current session still works.
   }
@@ -851,7 +823,7 @@ function profileScreen() {
       <div class="profile-agent-bear">${bearAgentMarkup({ id: "profile-bear", mode: isWorking ? "searching" : state.task ? "success" : "idle", compact: true, label: "我的小熊分身" })}</div>
       <div class="profile-agent-state"><span class="profile-agent-dot" aria-hidden="true"></span><p>${agentLabel}</p>${isWorking ? '<span class="profile-agent-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>' : ""}</div>
     </section>
-    <section class="profile-menu"><button data-action="switch-tab" data-value="results">${icon("home")}<span>我的任务</span>${icon("arrow")}</button><button data-action="open-insights">${icon("chart")}<span>匹配数据</span>${icon("arrow")}</button><button data-action="switch-tab" data-value="messages">${icon("bell")}<span>通知与续期</span>${icon("arrow")}</button><button data-action="open-settings">${icon("settings")}<span>设置</span>${icon("arrow")}</button></section>
+    <section class="profile-menu"><button data-action="open-task-center">${icon("home")}<span>我的任务</span>${icon("arrow")}</button><button data-action="open-insights">${icon("chart")}<span>匹配数据</span>${icon("arrow")}</button><button data-action="switch-tab" data-value="messages">${icon("bell")}<span>通知与续期</span>${icon("arrow")}</button><button data-action="open-settings">${icon("settings")}<span>设置</span>${icon("arrow")}</button></section>
   </section>`;
 }
 
@@ -1001,7 +973,8 @@ async function shareCandidate(candidate) {
     return;
   }
 
-  const shareData = { title: candidate.listing.shortTitle, text, url: location.href };
+  // Owner routes are authenticated control surfaces, not public share links.
+  const shareData = { title: candidate.listing.shortTitle, text };
   try {
     const photo = primaryListingPhoto(candidate.listing);
     if (!photo) throw new Error("listing has no public photo");
@@ -1011,7 +984,7 @@ async function shareCandidate(candidate) {
     const file = new File([blob], "房源照片.jpg", { type: blob.type || "image/jpeg" });
     if (navigator.canShare?.({ files: [file] })) shareData.files = [file];
   } catch {
-    // Text and the current deep link remain shareable if the image cannot be read.
+    // The privacy-safe text remains shareable if the public image cannot be read.
   }
 
   try {
@@ -1087,12 +1060,7 @@ function candidateDetail() {
   if (state.task?.kind === "supply") return tenantDetail(candidate);
   const listing = candidate.listing;
   const realCase = Boolean(candidate.matchCaseId);
-  return `<section class="detail-screen">
-    <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><button data-action="open-share" aria-label="分享房源">${icon("share")}</button></div>
-    <div class="detail-photo">${listingPhotoMarkup(listing, { priority: true })}</div>
-    <div class="detail-sheet">
-      <div class="detail-title"><div><h1>${escapeText(listing.shortTitle)}</h1><p>${escapeText(listing.station)} · 步行${minuteLabel(listing.walkMinutes)}</p></div><b>¥${formatInteger(candidate.agreedRent)}<small>/月</small></b></div>
-      <div class="detail-facts"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.floor)}/${escapeText(listing.room.totalFloors)} 层</span><span>${escapeText(listing.room.roommateCount)} 位室友</span></div>
+  const bodyMarkup = `
       <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button>${detailContactAction(realCase)}</div>
       <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
       <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需本人现场确认</p>"}</section>
@@ -1104,25 +1072,47 @@ function candidateDetail() {
       }).join("")}</section>
       ${matchClarificationSection(candidate)}
       ${matchDecisionActions(candidate)}<button class="report-link" data-action="open-report">举报房源</button>
-    </div>
-  </section>`;
+  `;
+  return renderMatchDetail({
+    selectionLabel: candidate.selectionLabel,
+    title: listing.shortTitle,
+    subtitle: `${listing.station} · 步行${minuteLabel(listing.walkMinutes)}`,
+    priceLabel: `¥${formatInteger(candidate.agreedRent)} /月`,
+    facts: [
+      `${listing.room.areaSqm}㎡`,
+      `${listing.room.floor}/${listing.room.totalFloors} 层`,
+      `${listing.room.roommateCount} 位室友`
+    ],
+    mediaMarkup: `<div class="detail-photo">${listingPhotoMarkup(listing, { priority: true })}</div>`,
+    bodyMarkup,
+    showShare: true,
+    backIconMarkup: icon("back"),
+    shareIconMarkup: icon("share")
+  });
 }
 
 function tenantDetail(candidate) {
   const tenant = candidate.tenant;
   const alias = candidate.displayAlias || tenant.alias;
   const mandate = tenant.mandate || {};
-  return `<section class="detail-screen tenant-detail-screen">
-    <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><span></span></div>
-    <div class="tenant-detail-hero"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><h1>${escapeText(alias)}</h1><p>${escapeText(tenant.occupation)}</p></div>
-    <div class="detail-sheet">
-      <div class="detail-facts"><span>${mandate.leaseFlexible ? "租期灵活" : `${escapeText(mandate.leaseMonths)} 个月`}</span><span>${escapeText(mandate.moveInWindow?.from || "入住日待定")}</span><span>最长通勤 ${escapeText(mandate.maxCommuteMinutes || "—")} 分钟</span></div>
+  const bodyMarkup = `
       <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
       <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需双方完成条款确认</p>"}</section>
       ${matchClarificationSection(candidate)}
       ${matchDecisionActions(candidate)}
-    </div>
-  </section>`;
+  `;
+  return renderMatchDetail({
+    selectionLabel: candidate.selectionLabel,
+    facts: [
+      mandate.leaseFlexible ? "租期灵活" : `${mandate.leaseMonths} 个月`,
+      mandate.moveInWindow?.from || "入住日待定",
+      `最长通勤 ${mandate.maxCommuteMinutes || "—"} 分钟`
+    ],
+    mediaMarkup: `<div class="tenant-detail-hero"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><h1>${escapeText(alias)}</h1><p>${escapeText(tenant.occupation)}</p></div>`,
+    bodyMarkup,
+    variant: "tenant",
+    backIconMarkup: icon("back")
+  });
 }
 
 function createSheet() {
@@ -1196,7 +1186,21 @@ function render() {
   const previousScrollTop = app.querySelector("#app-main")?.scrollTop || 0;
   const immersive = Boolean(state.flow) || state.page !== "root";
   const viewKey = [state.tab, state.flow, state.renterStage, state.supplyStage, state.page, state.activeCandidateId, state.sheet].join(":");
-  const content = state.flow === "renter" ? renterFlow() : state.flow === "supply" ? supplyFlow() : state.page === "candidate" ? candidateDetail() : rootScreen();
+  const content = state.flow === "renter"
+    ? renterFlow()
+    : state.flow === "supply"
+      ? supplyFlow()
+      : state.page === "candidate"
+        ? candidateDetail()
+        : state.page === "tasks"
+          ? renderTaskCenter({
+            tasks: state.tasks,
+            activeTaskId: state.activeTaskId,
+            loading: state.taskCenterLoading,
+            error: state.taskCenterError,
+            notice: state.routeNotice
+          })
+          : rootScreen();
   const demoBanner = state.demoBanner
     ? '<div class="demo-mode-banner" role="status">演示模式 · 当前候选包含测试语料</div>'
     : "";
@@ -1325,6 +1329,32 @@ function clearTaskPolling() {
   taskPollTimer = null;
 }
 
+function summarizeTaskMatches(task, matches = []) {
+  const activeCases = matches.filter((matchCase) => !["declined", "invalidated", "expired", "closed"].includes(matchCase.status));
+  return {
+    ...task,
+    candidateCount: task.suitable,
+    clarificationCount: activeCases.reduce((sum, matchCase) => sum + (matchCase.clarifications?.questions?.length || 0), 0),
+    myConfirmationCount: activeCases.filter((matchCase) => matchCase.currentTerms && matchCase.myDecision === "pending").length,
+    otherConfirmationCount: activeCases.filter((matchCase) => matchCase.myDecision === "confirmed" && matchCase.otherDecision !== "confirmed").length
+  };
+}
+
+async function refreshTaskList({ renderNow = false } = {}) {
+  const { tasks } = await listServerTasks();
+  const summaries = await Promise.all(tasks.map(async (task) => {
+    try {
+      const response = await listTaskMatches(task.id);
+      return summarizeTaskMatches(task, response.matches);
+    } catch {
+      return summarizeTaskMatches(task);
+    }
+  }));
+  state.tasks = summaries;
+  if (renderNow) render();
+  return summaries;
+}
+
 function applyServerSnapshot(snapshot, { renderNow = true } = {}) {
   if (!snapshot?.task) return;
   const previous = state.task?.id === snapshot.task.id ? state.task : null;
@@ -1357,6 +1387,19 @@ function applyServerSnapshot(snapshot, { renderNow = true } = {}) {
       retentionDays: 30
     }
   };
+  state.activeTaskId = snapshot.task.id;
+  const summaryIndex = state.tasks.findIndex((task) => task.id === snapshot.task.id);
+  const currentSummary = summarizeTaskMatches(snapshot.task, []);
+  if (summaryIndex >= 0) {
+    const previousSummary = state.tasks[summaryIndex];
+    state.tasks[summaryIndex] = {
+      ...currentSummary,
+      clarificationCount: previousSummary.clarificationCount,
+      myConfirmationCount: previousSummary.myConfirmationCount,
+      otherConfirmationCount: previousSummary.otherConfirmationCount
+    };
+  }
+  else state.tasks.unshift(currentSummary);
   const result = { scanned: snapshot.task.scanned, candidates: snapshot.candidates || [], audit: snapshot.events || [] };
   if (snapshot.task.kind === "renter") state.result = result;
   else state.supplyResult = result;
@@ -1369,7 +1412,7 @@ function startTaskPolling(taskId) {
   clearTaskPolling();
   let polling = false;
   const poll = async () => {
-    if (polling) return;
+    if (polling || state.activeTaskId !== taskId) return;
     polling = true;
     try {
       applyServerSnapshot(await getServerTask(taskId));
@@ -1402,17 +1445,34 @@ async function initializeServerState() {
     state.serverReady = true;
     const profileContact = await getProfileContact();
     state.contactProfile = profileContact.contact;
-    const knownId = state.task?.remoteId;
-    const { tasks } = await listServerTasks();
-    // The repository returns newest tasks first. Prefer the latest active task
-    // over a locally restored id, which may have been persisted by an older
-    // polling loop while the user was publishing a new mandate.
-    const selectedTask = tasks.find((task) => task.status === "active") ||
-      tasks.find((task) => task.id === knownId) ||
-      tasks[0];
+    const tasks = await refreshTaskList();
+    const route = parseRoute(location.href);
+    if (route.name === "invalid") {
+      await showTaskCenter("这个链接无效，已返回你的任务列表。", { replace: true });
+      return;
+    }
+    if (route.name === "task-center") {
+      state.page = "tasks";
+      clearTaskPolling();
+      render();
+      return;
+    }
+    if (["task", "match"].includes(route.name)) {
+      const owned = tasks.some((task) => task.id === route.taskId);
+      if (!owned) {
+        await showTaskCenter("该任务不存在，或不属于当前账号。", { replace: true });
+        return;
+      }
+      await selectServerTask(route.taskId, {
+        matchCaseId: route.name === "match" ? route.matchCaseId : null,
+        navigate: false
+      });
+      return;
+    }
+    const selectedTask = tasks.find((task) => task.id === state.activeTaskId) ||
+      tasks.find((task) => task.status === "active") || tasks[0];
     if (selectedTask) {
-      applyServerSnapshot(await getServerTask(selectedTask.id));
-      if (selectedTask.status === "active") startTaskPolling(selectedTask.id);
+      await selectServerTask(selectedTask.id, { navigate: false });
     } else {
       // The previous prototype persisted a local demo task. Once the server is
       // authoritative, never let that stale local object masquerade as a live
@@ -1431,6 +1491,100 @@ async function initializeServerState() {
     state.syncError = error.message;
     render();
   }
+}
+
+function candidateIdentifier(candidate, kind = state.task?.kind) {
+  return kind === "supply" ? candidate?.tenant?.id : candidate?.listing?.id;
+}
+
+async function selectServerTask(taskId, { matchCaseId = null, navigate = true, replace = false } = {}) {
+  const ownedTask = state.tasks.find((task) => task.id === taskId);
+  if (!ownedTask) {
+    await showTaskCenter("该任务不存在，或不属于当前账号。", { replace: true });
+    return false;
+  }
+  clearTaskPolling();
+  state.taskCenterError = null;
+  state.routeNotice = null;
+  state.activeCandidateId = null;
+  state.activeMatchCase = null;
+  state.revealedContact = null;
+  try {
+    const snapshot = await getServerTask(taskId);
+    applyServerSnapshot(snapshot, { renderNow: false });
+    state.page = "root";
+    state.tab = "results";
+    if (matchCaseId) {
+      const candidate = (snapshot.candidates || []).find((item) => item.matchCaseId === matchCaseId);
+      if (!candidate) {
+        await showTaskCenter("该匹配结果已失效，已返回你的任务列表。", { replace: true });
+        return false;
+      }
+      state.activeCandidateId = candidateIdentifier(candidate, snapshot.task.kind);
+      state.page = "candidate";
+      await loadActiveMatchCase();
+    } else {
+      render();
+    }
+    if (snapshot.task.status === "active") startTaskPolling(taskId);
+    if (navigate) {
+      const route = matchCaseId
+        ? { name: "match", taskId, matchCaseId }
+        : { name: "task", taskId };
+      if (replace) replaceRoute(route); else pushRoute(route);
+    }
+    return true;
+  } catch (error) {
+    await showTaskCenter(error.status === 404 ? "该任务不存在，或不属于当前账号。" : error.message, { replace: true });
+    return false;
+  }
+}
+
+async function showTaskCenter(notice = "", { replace = false } = {}) {
+  clearTaskPolling();
+  state.page = "tasks";
+  state.flow = null;
+  state.sheet = null;
+  state.routeNotice = notice || null;
+  state.taskCenterLoading = true;
+  state.taskCenterError = null;
+  render();
+  try {
+    await refreshTaskList();
+  } catch (error) {
+    state.taskCenterError = error.message || "任务列表读取失败";
+  } finally {
+    state.taskCenterLoading = false;
+    render();
+  }
+  if (replace) replaceRoute({ name: "task-center" });
+  else if (parseRoute(location.href).name !== "task-center") pushRoute({ name: "task-center" });
+}
+
+async function restoreRouteFromLocation() {
+  const route = parseRoute(location.href);
+  if (route.name === "home") {
+    state.page = "root";
+    state.flow = null;
+    state.activeCandidateId = null;
+    state.activeMatchCase = null;
+    state.activeMatchCaseError = null;
+    state.revealedContact = null;
+    render();
+    return;
+  }
+  if (route.name === "task-center") {
+    await showTaskCenter();
+    return;
+  }
+  if (["task", "match"].includes(route.name)) {
+    await selectServerTask(route.taskId, {
+      matchCaseId: route.name === "match" ? route.matchCaseId : null,
+      navigate: false
+    });
+    return;
+  }
+  await showTaskCenter("这个链接无效，已返回你的任务列表。", { replace: true });
 }
 
 function buildTask(kind, total, suitable, label) {
@@ -1464,6 +1618,9 @@ function startMatching(kind, remoteTask = null) {
     state.task.status = remoteTask.status;
     state.task.candidateVersion = remoteTask.candidateVersion;
     state.task.lastMatchAt = remoteTask.lastMatchAt;
+    state.activeTaskId = remoteTask.id;
+    state.tasks = [summarizeTaskMatches(remoteTask), ...state.tasks.filter((task) => task.id !== remoteTask.id)];
+    replaceRoute({ name: "task", taskId: remoteTask.id });
   }
   state.stats.tasksCreated += 1;
   state.tab = "match";
@@ -1665,7 +1822,50 @@ app.addEventListener("click", async (event) => {
   const action = target.dataset.action;
   const value = target.dataset.value;
   switch (action) {
-    case "switch-tab": state.tab = value; state.page = "root"; state.revealedContact = null; if (value === "messages") state.messagesRead = true; render(); break;
+    case "switch-tab":
+      state.tab = value;
+      state.page = "root";
+      state.revealedContact = null;
+      if (value === "messages") state.messagesRead = true;
+      if (value === "results" && state.activeTaskId) pushRoute({ name: "task", taskId: state.activeTaskId });
+      else pushRoute({ name: "home" });
+      render();
+      break;
+    case "open-task-center": await showTaskCenter(); break;
+    case "close-task-center":
+      state.routeNotice = null;
+      if (state.activeTaskId && state.tasks.some((task) => task.id === state.activeTaskId)) {
+        await selectServerTask(state.activeTaskId);
+      } else {
+        state.page = "root";
+        state.tab = "match";
+        pushRoute({ name: "home" });
+        render();
+      }
+      break;
+    case "task-center-create":
+      state.page = "root";
+      state.tab = "match";
+      state.sheet = "create";
+      pushRoute({ name: "home" });
+      render();
+      break;
+    case "open-task": await selectServerTask(target.dataset.id); break;
+    case "set-task-status": {
+      target.disabled = true;
+      try {
+        const response = await setServerTaskStatus(target.dataset.id, value);
+        const index = state.tasks.findIndex((task) => task.id === response.task.id);
+        if (index >= 0) state.tasks[index] = { ...state.tasks[index], ...response.task };
+        if (state.task?.remoteId === response.task.id) state.task.status = response.task.status;
+        await refreshTaskList();
+        showToast(value === "active" ? "任务已恢复，将继续接收匹配" : "任务已暂停");
+      } catch (error) {
+        state.taskCenterError = error.message || "任务状态更新失败";
+        render();
+      }
+      break;
+    }
     case "open-create": state.sheet = "create"; render(); break;
     case "close-sheet":
     case "close-sheet-from-scrim": state.sheet = null; state.contactSubmitting = false; render(); break;
@@ -1783,7 +1983,26 @@ app.addEventListener("click", async (event) => {
       }
       break;
     }
-    case "open-candidate": state.activeCandidateId = target.dataset.id; state.page = "candidate"; state.revealedContact = null; await loadActiveMatchCase(); break;
+    case "open-candidate": {
+      state.activeCandidateId = target.dataset.id;
+      state.page = "candidate";
+      state.revealedContact = null;
+      const candidate = activeCandidate();
+      await loadActiveMatchCase();
+      if (state.task?.remoteId && candidate?.matchCaseId) {
+        pushRoute({ name: "match", taskId: state.task.remoteId, matchCaseId: candidate.matchCaseId });
+      }
+      break;
+    }
+    case "back-match-detail":
+      if (history.state?.route === "match") history.back();
+      else if (state.activeTaskId) await selectServerTask(state.activeTaskId, { replace: true });
+      else {
+        state.page = "root";
+        replaceRoute({ name: "home" });
+        render();
+      }
+      break;
     case "back-root": state.page = "root"; state.tab = "results"; state.activeMatchCase = null; state.activeMatchCaseError = null; state.revealedContact = null; render(); break;
     case "retry-match-case": await loadActiveMatchCase(); break;
     case "answer-clarification-option": await submitClarification(target.dataset.id, target.dataset.value); break;
@@ -1944,6 +2163,8 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     }
   });
 }
+
+window.addEventListener("popstate", () => void restoreRouteFromLocation());
 
 render();
 void initializeServerState();
