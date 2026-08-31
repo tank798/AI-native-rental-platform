@@ -136,10 +136,25 @@ function clarificationCategory(reasonCode) {
   return "其他匹配条件";
 }
 
+function publicTermsChanges(previous, current) {
+  const labels = {
+    rent: "月租",
+    leaseMonths: "租期",
+    moveInWindow: "入住日期",
+    feeSummary: "费用规则",
+    approximateLocation: "大致位置",
+    viewingAvailability: "看房安排",
+    highlights: "房源要点"
+  };
+  return Object.keys(labels)
+    .filter((key) => JSON.stringify(previous?.[key] ?? null) !== JSON.stringify(current?.[key] ?? null))
+    .map((key) => labels[key]);
+}
+
 /** Builds the same owner-scoped case view for GET and mutation responses. */
 function publicMatchCase(matching, matchCase, ownerId) {
+  const decisionState = matching.confirmations.status(matchCase.id, ownerId);
   const party = matching.matchCaseRepository.participantParty(matchCase.id, ownerId);
-  if (!party) return null;
   const open = matching.matchCaseRepository
     .listClarifications(matchCase.id)
     .filter((item) => item.status === "open");
@@ -155,16 +170,31 @@ function publicMatchCase(matching, matchCase, ownerId) {
       createdAt: item.createdAt
     }));
   const otherQuestions = open.filter((item) => item.targetParty !== party);
+  const confirmationHistory = matching.matchCaseRepository
+    .listConfirmations(matchCase.id)
+    .filter((item) => item.party === party && item.revokedAt)
+    .sort((left, right) => right.confirmedAt.localeCompare(left.confirmedAt));
+  const previousConfirmation = decisionState.myDecision === "pending" ? confirmationHistory[0] : null;
+  const previousTerms = previousConfirmation
+    ? matching.matchCaseRepository.listTerms(matchCase.id).find((item) => item.version === previousConfirmation.termsVersion)
+    : null;
   return {
     id: matchCase.id,
     status: matchCase.status,
-    party,
-    currentTermsVersion: matchCase.currentTermsVersion,
-    terms: matchCase.terms ? {
+    myParty: party,
+    myDecision: decisionState.myDecision,
+    otherDecision: decisionState.otherDecision,
+    currentTerms: matchCase.terms ? {
       version: matchCase.terms.version,
+      hash: matchCase.terms.hash,
       publicTerms: matchCase.terms.publicTerms,
       nonBlockingUnknowns: matchCase.terms.nonBlockingUnknowns
     } : null,
+    contactUnlocked: false,
+    requiresReconfirmation: Boolean(previousConfirmation),
+    termsChangeSummary: previousConfirmation
+      ? publicTermsChanges(previousTerms?.publicTerms, matchCase.terms?.publicTerms)
+      : [],
     clarifications: {
       questions: ownQuestions,
       otherPendingCount: otherQuestions.length,
@@ -445,6 +475,37 @@ export function createRentalServer(options = {}) {
     if (request.method === "GET" && url.pathname === "/api/tasks") {
       const tasks = repository.listTasksForOwner(session.id).map(publicTask);
       return json(response, 200, { tasks });
+    }
+
+    const taskMatchesRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/matches$/);
+    if (request.method === "GET" && taskMatchesRoute) {
+      const taskId = decodeURIComponent(taskMatchesRoute[1]);
+      const task = repository.getTask(taskId);
+      if (!task || task.ownerId !== session.id) return json(response, 404, { error: "任务不存在", code: "TASK_NOT_FOUND" });
+      const matches = matching.matchCaseRepository
+        .listForTask(taskId)
+        .map((matchCase) => publicMatchCase(matching, matchCase, session.id));
+      return json(response, 200, { matches });
+    }
+
+    const matchDecisionRoute = url.pathname.match(/^\/api\/matches\/([^/]+)\/(confirm|decline)$/);
+    if (request.method === "POST" && matchDecisionRoute) {
+      assertSameOrigin(request);
+      enforceWriteLimit(request, session);
+      const body = await readJson(request);
+      const input = {
+        matchCaseId: decodeURIComponent(matchDecisionRoute[1]),
+        ownerId: session.id,
+        termsVersion: body.termsVersion,
+        termsHash: body.termsHash
+      };
+      const decision = matchDecisionRoute[2] === "confirm"
+        ? matching.confirmations.confirm(input)
+        : matching.confirmations.decline(input);
+      return json(response, 200, {
+        matchCase: publicMatchCase(matching, decision.matchCase, session.id),
+        idempotent: decision.idempotent
+      });
     }
 
     const clarificationAnswerMatch = url.pathname.match(/^\/api\/matches\/([^/]+)\/clarifications\/([^/]+)\/answers$/);

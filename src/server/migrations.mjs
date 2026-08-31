@@ -8,7 +8,8 @@ export const migrations = Object.freeze([
   { version: 1, name: "baseline", sqlFile: "001-baseline.sql" },
   { version: 2, name: "task-fields-and-outbox", sqlFile: "002-task-fields-and-outbox.sql" },
   { version: 3, name: "bilateral-match-cases", sqlFile: "003-bilateral-match-cases.sql" },
-  { version: 4, name: "clarification-answer-spec", sqlFile: "004-clarification-answer-spec.sql" }
+  { version: 4, name: "clarification-answer-spec", sqlFile: "004-clarification-answer-spec.sql" },
+  { version: 5, name: "confirmation-input-versions", sqlFile: "005-confirmation-input-versions.sql" }
 ].map(Object.freeze));
 
 export const latestSchemaVersion = migrations.at(-1).version;

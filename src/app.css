@@ -2693,6 +2693,31 @@ button {
   color: var(--blue-deep);
 }
 
+.terms-change-summary {
+  margin-top: 12px;
+  padding: 12px;
+  border-left: 3px solid #d89135;
+  border-radius: 0 12px 12px 0;
+  background: #fff8eb;
+}
+
+.terms-change-summary:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.terms-change-summary b {
+  color: #80571e;
+  font-size: 12px;
+}
+
+.terms-change-summary p {
+  margin: 5px 0 0;
+  color: #7e6849;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .tenant-detail-hero {
   min-height: 280px;
   padding: 96px 20px 48px;

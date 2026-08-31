@@ -96,6 +96,24 @@ export function getMatchCase(matchCaseId) {
   return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}`);
 }
 
+export function listTaskMatches(taskId) {
+  return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/matches`);
+}
+
+export function confirmMatchCase(matchCaseId, termsVersion, termsHash) {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ termsVersion, termsHash })
+  });
+}
+
+export function declineMatchCase(matchCaseId, termsVersion, termsHash) {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/decline`, {
+    method: "POST",
+    body: JSON.stringify({ termsVersion, termsHash })
+  });
+}
+
 export function answerMatchClarification(matchCaseId, clarificationId, answer) {
   return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/clarifications/${encodeURIComponent(clarificationId)}/answers`, {
     method: "POST",

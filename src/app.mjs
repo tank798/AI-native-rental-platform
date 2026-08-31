@@ -26,7 +26,9 @@ import {
 } from "./task-lifecycle.mjs";
 import {
   answerMatchClarification,
+  confirmMatchCase,
   createServerTask,
+  declineMatchCase,
   ensureServerSession,
   getEvidenceStatus,
   getMatchCase,
@@ -205,7 +207,6 @@ function initialProductState() {
     taskNotices: [structuredClone(demoRenewalTask)],
     archivedTasks: [],
     messagesRead: false,
-    contactUnlocked: false,
     activeScenario: "full-demo",
     regression: null,
     toast: null,
@@ -885,7 +886,7 @@ function clarificationControl(question) {
 }
 
 function termsSummary(matchCase) {
-  const terms = matchCase?.terms?.publicTerms;
+  const terms = matchCase?.currentTerms?.publicTerms;
   if (!terms) return "";
   const rent = terms.rent ? `¥${formatInteger(terms.rent)}/月` : "月租待确认";
   const lease = terms.leaseMonths ? `${escapeText(terms.leaseMonths)} 个月` : "租期待确认";
@@ -902,15 +903,45 @@ function matchClarificationSection(candidate) {
   const questions = matchCase.clarifications?.questions || [];
   const otherCount = Number(matchCase.clarifications?.otherPendingCount || 0);
   const otherCategories = matchCase.clarifications?.otherPendingCategories || [];
-  const ready = matchCase.status === "terms_ready";
-  const statusText = ready ? "核心条件已经匹配" : questions.length ? "需要你补充信息" : otherCount ? "正在等待对方补充" : "正在重新核对条件";
+  const ready = ["terms_ready", "awaiting_confirmations", "mutually_confirmed"].includes(matchCase.status);
+  const terminal = ["declined", "invalidated", "expired", "closed"].includes(matchCase.status);
+  const statusText = terminal
+    ? "匹配已失效"
+    : matchCase.status === "mutually_confirmed"
+      ? "双方已确认同一条款"
+      : matchCase.myDecision === "confirmed"
+        ? "你已确认，等待对方"
+        : matchCase.otherDecision === "confirmed"
+          ? "对方已确认，等待你"
+          : matchCase.requiresReconfirmation
+            ? "条款已变化，需要重新确认"
+            : ready
+              ? "待你确认"
+              : questions.length
+                ? "需要你补充信息"
+                : otherCount
+                  ? "正在等待对方补充"
+                  : "正在重新核对条件";
+  const badge = terminal ? "已失效" : matchCase.status === "mutually_confirmed" ? "已确认" : ready ? "待确认" : "核对中";
   return `<section class="case-progress-card ${ready ? "is-ready" : ""}">
-    <header><div><span>双边匹配 · 条款 v${escapeText(matchCase.currentTermsVersion || "—")}</span><h2>${statusText}</h2></div><i>${ready ? "可确认" : "核对中"}</i></header>
+    <header><div><span>双边匹配 · 条款 v${escapeText(matchCase.currentTerms?.version || "—")} · ${escapeText(matchCase.updatedAt?.replace("T", " ").slice(0, 16) || "")}</span><h2>${statusText}</h2></div><i>${badge}</i></header>
     ${termsSummary(matchCase)}
+    ${matchCase.requiresReconfirmation ? `<div class="terms-change-summary" tabindex="-1" data-terms-change-summary><b>本次需要重新确认</b><p>${matchCase.termsChangeSummary?.length ? `${escapeText(matchCase.termsChangeSummary.join("、"))}发生变化。` : "任务输入已经更新，公开条款需重新确认。"}</p></div>` : ""}
     ${questions.map((question) => `<article class="match-question"><span>${escapeText(question.category)}</span><h3>${escapeText(question.question)}</h3>${question.answerSpec?.provider === "rule_fallback" ? "<p>AI 暂不可用，已切换规则问题</p>" : ""}${clarificationControl(question)}</article>`).join("")}
     ${otherCount ? `<p class="counterparty-pending">对方还有 ${otherCount} 项待补充${otherCategories.length ? `：${escapeText(otherCategories.join("、"))}` : ""}。未公开答案不会显示。</p>` : ""}
     ${state.clarificationSubmitting ? '<p class="recalculating" role="status">正在写入新版本并重新匹配…</p>' : ""}
   </section>`;
+}
+
+function matchDecisionActions(candidate) {
+  if (!candidate.matchCaseId) return `<button class="primary-button" disabled>演示候选不进入双方确认</button>`;
+  const matchCase = state.activeMatchCase;
+  if (!matchCase || state.activeMatchCaseLoading) return `<button class="primary-button" disabled>正在读取确认状态</button>`;
+  if (matchCase.status === "clarifying") return `<button class="primary-button" disabled>先完成匹配信息核对</button>`;
+  if (["declined", "invalidated", "expired", "closed"].includes(matchCase.status)) return `<button class="primary-button" disabled>匹配已失效</button>`;
+  if (matchCase.status === "mutually_confirmed") return `<button class="primary-button" disabled>双方已确认</button>`;
+  if (matchCase.myDecision === "confirmed") return `<button class="primary-button" disabled>你已确认，等待对方</button><button class="report-link" data-action="decline-match">撤回并拒绝当前条款</button>`;
+  return `<button class="primary-button" data-action="confirm-match">确认条款 v${escapeText(matchCase.currentTerms?.version)}</button><button class="report-link" data-action="decline-match">拒绝当前条款</button>`;
 }
 
 function listingShareText(candidate) {
@@ -976,6 +1007,9 @@ async function loadActiveMatchCase() {
     if (activeCandidate()?.matchCaseId === requestedId) {
       state.activeMatchCaseLoading = false;
       render();
+      if (state.activeMatchCase?.requiresReconfirmation) {
+        requestAnimationFrame(() => app.querySelector("[data-terms-change-summary]")?.focus());
+      }
     }
   }
 }
@@ -1008,7 +1042,6 @@ function candidateDetail() {
   if (!candidate) return resultsScreen();
   if (state.task?.kind === "supply") return tenantDetail(candidate);
   const listing = candidate.listing;
-  const awaitingClarification = state.activeMatchCase?.status === "clarifying";
   const realCase = Boolean(candidate.matchCaseId);
   return `<section class="detail-screen">
     <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><button data-action="open-share" aria-label="分享房源">${icon("share")}</button></div>
@@ -1016,8 +1049,7 @@ function candidateDetail() {
     <div class="detail-sheet">
       <div class="detail-title"><div><h1>${escapeText(listing.shortTitle)}</h1><p>${escapeText(listing.station)} · 步行${minuteLabel(listing.walkMinutes)}</p></div><b>¥${formatInteger(candidate.agreedRent)}<small>/月</small></b></div>
       <div class="detail-facts"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.floor)}/${escapeText(listing.room.totalFloors)} 层</span><span>${escapeText(listing.room.roommateCount)} 位室友</span></div>
-      <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button><button ${realCase ? "disabled" : 'data-action="copy-contact"'}>${icon("contact")}<span>${realCase ? "确认后开放" : state.contactUnlocked ? "复制微信号" : "交换联系"}</span></button></div>
-      ${!realCase && state.contactUnlocked ? `<section class="contact-card"><span>微信号</span><b>zhunaer_demo</b><button data-action="copy-contact">复制</button></section>` : ""}
+      <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button><button disabled>${icon("contact")}<span>${realCase ? "确认后开放" : "演示不开放"}</span></button></div>
       <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
       <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需本人现场确认</p>"}</section>
       <section class="source-card"><h2>资料来源</h2>${candidate.provenance.map((item) => `<div><span>${escapeText(item.label)}</span><b>${escapeText(item.value)}</b><em>${escapeText(item.source)}</em></div>`).join("")}</section>
@@ -1027,7 +1059,7 @@ function candidateDetail() {
         return `<div class="agent-dialogue-row ${side}"><span>${actor}</span><div><b>${escapeText(event.title)}</b><p>${escapeText(event.detail)}</p></div></div>`;
       }).join("")}</section>
       ${matchClarificationSection(candidate)}
-      <button class="primary-button" data-action="confirm-candidate" ${awaitingClarification ? "disabled" : ""}>${awaitingClarification ? "先完成匹配信息核对" : state.contactUnlocked ? "已完成双方确认" : "双方确认并交换联系方式"}</button><button class="report-link" data-action="open-report">举报房源</button>
+      ${matchDecisionActions(candidate)}<button class="report-link" data-action="open-report">举报房源</button>
     </div>
   </section>`;
 }
@@ -1036,7 +1068,6 @@ function tenantDetail(candidate) {
   const tenant = candidate.tenant;
   const alias = candidate.displayAlias || tenant.alias;
   const mandate = tenant.mandate || {};
-  const awaitingClarification = state.activeMatchCase?.status === "clarifying";
   return `<section class="detail-screen tenant-detail-screen">
     <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><span></span></div>
     <div class="tenant-detail-hero"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><h1>${escapeText(alias)}</h1><p>${escapeText(tenant.occupation)}</p></div>
@@ -1045,7 +1076,7 @@ function tenantDetail(candidate) {
       <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
       <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需双方完成条款确认</p>"}</section>
       ${matchClarificationSection(candidate)}
-      <button class="primary-button" data-action="confirm-candidate" ${awaitingClarification ? "disabled" : ""}>${awaitingClarification ? "先完成匹配信息核对" : "确认匹配意向"}</button>
+      ${matchDecisionActions(candidate)}
     </div>
   </section>`;
 }
@@ -1081,9 +1112,7 @@ function photoSheet() {
 function shareSheet() {
   const candidate = activeCandidate();
   if (!candidate) return "";
-  const contactAction = candidate.matchCaseId
-    ? `<button class="source-option" disabled>${icon("contact")}<span>双方确认后开放联系方式</span>${icon("lock")}</button>`
-    : `<button class="source-option" data-action="copy-contact">${icon("contact")}<span>复制联系方式</span>${icon("arrow")}</button>`;
+  const contactAction = `<button class="source-option" disabled>${icon("contact")}<span>${candidate.matchCaseId ? "双方确认后开放联系方式" : "演示候选不开放联系方式"}</span>${icon("lock")}</button>`;
   return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo ${roomVisualClass(candidate.listing.id)}"></div><div><b>${escapeText(candidate.listing.shortTitle)}</b><span>¥${formatInteger(candidate.agreedRent)}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button>${contactAction}</section></div>`;
 }
 
@@ -1441,7 +1470,6 @@ function resetAll() {
     taskNotices: [{ ...demoRenewalTask, lifecycle: createTaskLifecycle(addDaysToIso(todayInShanghai(), -25)) }],
     archivedTasks: [],
     messagesRead: false,
-    contactUnlocked: false,
     regression: null
   };
   render();
@@ -1688,11 +1716,34 @@ app.addEventListener("click", async (event) => {
       await submitClarification(clarificationId, answer);
       break;
     }
-    case "confirm-candidate":
-      if (!state.contactUnlocked) state.stats.confirmed += 1;
-      state.contactUnlocked = true;
-      showToast("联系方式已解锁");
+    case "confirm-match": {
+      const matchCase = state.activeMatchCase;
+      if (!matchCase?.currentTerms) break;
+      target.disabled = true;
+      try {
+        const response = await confirmMatchCase(matchCase.id, matchCase.currentTerms.version, matchCase.currentTerms.hash);
+        state.activeMatchCase = response.matchCase;
+        showToast(response.idempotent ? "你已经确认过当前条款" : response.matchCase.status === "mutually_confirmed" ? "双方已确认同一条款" : "已确认，正在等待对方");
+      } catch (error) {
+        showToast(error.message || "确认失败");
+        await loadActiveMatchCase();
+      }
       break;
+    }
+    case "decline-match": {
+      const matchCase = state.activeMatchCase;
+      if (!matchCase?.currentTerms) break;
+      target.disabled = true;
+      try {
+        const response = await declineMatchCase(matchCase.id, matchCase.currentTerms.version, matchCase.currentTerms.hash);
+        state.activeMatchCase = response.matchCase;
+        showToast(response.idempotent ? "你已经拒绝当前条款" : "已拒绝当前条款");
+      } catch (error) {
+        showToast(error.message || "拒绝失败");
+        await loadActiveMatchCase();
+      }
+      break;
+    }
     case "contact-tenant": showToast("已发起双方确认"); break;
     case "open-share": state.sheet = "share"; render(); break;
     case "copy-listing": {
@@ -1701,7 +1752,6 @@ app.addEventListener("click", async (event) => {
       break;
     }
     case "share-listing": { const candidate = activeCandidate(); if (candidate) await shareCandidate(candidate); break; }
-    case "copy-contact": state.contactUnlocked = true; state.sheet = null; await copyText("zhunaer_demo", "微信号已复制"); break;
     case "open-report": state.sheet = "report"; render(); break;
     case "set-report-type": state.reportType = value; render(); break;
     case "toggle-report-evidence": state.reportHasEvidence = target.checked; break;

@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createClock } from "../clock.mjs";
+import { hashPublicTerms, normalizePublicTerms } from "./terms-service.mjs";
 
 const FORBIDDEN_PUBLIC_KEYS = /^(?:hardMax|minimumAuthorizedRent|minRent|exactAddress|address|rawText|evidenceRefs|storagePath|contact|sessionToken|token)$/iu;
 
@@ -22,16 +23,43 @@ function assertPublicValue(value, path = "public") {
   }
 }
 
-function hashTerms(payload) {
-  return createHash("sha256").update(stableJson(payload)).digest("hex");
-}
-
 function parseJsonStrict(value, label) {
   try {
     return JSON.parse(value);
   } catch (error) {
     throw new Error(`${label} contains invalid JSON`, { cause: error });
   }
+}
+
+function confirmationFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    matchCaseId: row.match_case_id,
+    party: row.party,
+    ownerId: row.owner_id,
+    termsVersion: Number(row.terms_version),
+    termsHash: row.terms_hash,
+    renterInputVersion: Number(row.renter_input_version),
+    supplyInputVersion: Number(row.supply_input_version),
+    decision: row.decision,
+    confirmedAt: row.confirmed_at,
+    revokedAt: row.revoked_at || null
+  };
+}
+
+function termsFromRow(row, caseId) {
+  if (!row) return null;
+  return {
+    matchCaseId: caseId,
+    version: Number(row.version),
+    hash: row.terms_hash,
+    publicTerms: parseJsonStrict(row.public_terms_json, `match terms ${caseId}`),
+    blockingUnknowns: parseJsonStrict(row.blocking_unknowns_json, `blocking unknowns ${caseId}`),
+    nonBlockingUnknowns: parseJsonStrict(row.non_blocking_unknowns_json, `non-blocking unknowns ${caseId}`),
+    createdAt: row.created_at,
+    invalidatedAt: row.invalidated_at || null
+  };
 }
 
 function caseFromRow(row) {
@@ -110,6 +138,7 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     latestTermsVersion: db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM match_terms WHERE match_case_id = ?"),
     termsByHash: db.prepare("SELECT * FROM match_terms WHERE match_case_id = ? AND terms_hash = ?"),
     termsByVersion: db.prepare("SELECT * FROM match_terms WHERE match_case_id = ? AND version = ?"),
+    allTerms: db.prepare("SELECT * FROM match_terms WHERE match_case_id = ? ORDER BY version ASC"),
     insertTerms: db.prepare(`
       INSERT INTO match_terms(match_case_id, version, terms_hash, public_terms_json, blocking_unknowns_json,
                               non_blocking_unknowns_json, created_at)
@@ -117,10 +146,26 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     `),
     reactivateTerms: db.prepare("UPDATE match_terms SET invalidated_at = NULL WHERE match_case_id = ? AND version = ?"),
     invalidateOtherTerms: db.prepare("UPDATE match_terms SET invalidated_at = ? WHERE match_case_id = ? AND version <> ? AND invalidated_at IS NULL"),
+    revokeConfirmations: db.prepare("UPDATE party_confirmations SET revoked_at = ? WHERE match_case_id = ? AND revoked_at IS NULL"),
+    confirmations: db.prepare("SELECT * FROM party_confirmations WHERE match_case_id = ? ORDER BY terms_version ASC, party ASC"),
+    confirmationByParty: db.prepare("SELECT * FROM party_confirmations WHERE match_case_id = ? AND party = ? AND revoked_at IS NULL"),
+    insertConfirmation: db.prepare(`
+      INSERT INTO party_confirmations(id, match_case_id, party, owner_id, terms_version, terms_hash,
+                                      renter_input_version, supply_input_version, decision, confirmed_at, revoked_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+    `),
+    updateConfirmationDecision: db.prepare(`
+      UPDATE party_confirmations
+      SET decision = ?, terms_hash = ?, confirmed_at = ?, revoked_at = NULL
+      WHERE id = ?
+    `),
+    updateCaseStatus: db.prepare("UPDATE match_cases SET status = ?, terminal_reason = ?, updated_at = ? WHERE id = ?"),
     insertEvent: db.prepare("INSERT INTO match_events(match_case_id, actor_owner_id, type, payload_json, created_at) VALUES (?, NULL, ?, ?, ?)"),
+    insertActorEvent: db.prepare("INSERT INTO match_events(match_case_id, actor_owner_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)"),
     events: db.prepare("SELECT * FROM match_events WHERE match_case_id = ? ORDER BY id ASC"),
     participant: db.prepare(`
-      SELECT CASE WHEN renter.owner_id = ? THEN 'renter' WHEN supply.owner_id = ? THEN 'supply' END AS party
+      SELECT CASE WHEN renter.owner_id = ? THEN 'renter' WHEN supply.owner_id = ? THEN 'supply' END AS party,
+             renter.owner_id AS renter_owner_id, supply.owner_id AS supply_owner_id
       FROM match_cases AS cases
       JOIN tasks AS renter ON renter.id = cases.renter_task_id
       JOIN tasks AS supply ON supply.id = cases.supply_task_id
@@ -172,13 +217,7 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
   function termsFor(row) {
     if (!row?.current_terms_version) return null;
     const terms = statements.termsByVersion.get(row.id, row.current_terms_version);
-    return terms ? {
-      version: Number(terms.version),
-      hash: terms.terms_hash,
-      publicTerms: parseJsonStrict(terms.public_terms_json, `match terms ${row.id}`),
-      blockingUnknowns: parseJsonStrict(terms.blocking_unknowns_json, `blocking unknowns ${row.id}`),
-      nonBlockingUnknowns: parseJsonStrict(terms.non_blocking_unknowns_json, `non-blocking unknowns ${row.id}`)
-    } : null;
+    return termsFromRow(terms, row.id);
   }
 
   function hydrate(row) {
@@ -190,13 +229,13 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     if (evaluation.status === "hard_conflict") return null;
     assertPair(renterTask.id, supplyTask.id);
     const publicRecord = {
-      publicTerms: evaluation.termsProposal,
+      publicTerms: normalizePublicTerms(evaluation.termsProposal),
       blockingUnknowns: evaluation.blockingUnknowns,
       nonBlockingUnknowns: evaluation.nonBlockingUnknowns
     };
     assertPublicValue(publicRecord);
-    const termsHash = hashTerms(publicRecord);
-    const status = evaluation.status === "clarifying" ? "clarifying" : "terms_ready";
+    const termsHash = hashPublicTerms(publicRecord.publicTerms);
+    const evaluatedStatus = evaluation.status === "clarifying" ? "clarifying" : "terms_ready";
     const at = evaluation.evaluatedAt || clock.nowIso();
 
     return database.transaction(() => {
@@ -208,7 +247,7 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
           id,
           renterTask.id,
           supplyTask.id,
-          status,
+          evaluatedStatus,
           evaluation.renterInputVersion,
           evaluation.supplyInputVersion,
           expiresAt,
@@ -238,10 +277,23 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
       }
       statements.invalidateOtherTerms.run(at, existing.id, terms.version);
 
+      const sameConfirmationDocument = Number(existing.current_terms_version || 0) === Number(terms.version)
+        && Number(existing.renter_input_version) === evaluation.renterInputVersion
+        && Number(existing.supply_input_version) === evaluation.supplyInputVersion;
+      const status = sameConfirmationDocument && ["awaiting_confirmations", "mutually_confirmed", "declined"].includes(existing.status)
+        ? existing.status
+        : evaluatedStatus;
+
       const stateChanged = created || termsCreated || existing.status !== status
         || Number(existing.renter_input_version) !== evaluation.renterInputVersion
         || Number(existing.supply_input_version) !== evaluation.supplyInputVersion
         || Number(existing.current_terms_version || 0) !== Number(terms.version);
+      const confirmationInputsChanged = !created && (
+        Number(existing.current_terms_version || 0) !== Number(terms.version)
+        || Number(existing.renter_input_version) !== evaluation.renterInputVersion
+        || Number(existing.supply_input_version) !== evaluation.supplyInputVersion
+      );
+      if (confirmationInputsChanged) statements.revokeConfirmations.run(at, existing.id);
       statements.update.run(
         status,
         evaluation.renterInputVersion,
@@ -262,6 +314,7 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
       const before = statements.byId.get(caseId);
       if (!before) return null;
       const changed = statements.invalidate.run(status, reason, at, caseId).changes > 0;
+      if (changed) statements.revokeConfirmations.run(at, caseId);
       if (changed && before.status !== status) statements.insertEvent.run(caseId, `case_${status}`, stableJson({ reason }), at);
       return hydrate(statements.byId.get(caseId));
     });
@@ -314,6 +367,43 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     return clarificationFromRow(statements.clarificationById.get(id, matchCaseId));
   }
 
+  function recordDecision({
+    matchCaseId,
+    party,
+    ownerId,
+    termsVersion,
+    termsHash,
+    renterInputVersion,
+    supplyInputVersion,
+    decision,
+    at = clock.nowIso()
+  }) {
+    return database.transaction(() => {
+      const existing = confirmationFromRow(statements.confirmationByParty.get(matchCaseId, party));
+      if (!existing) {
+        statements.insertConfirmation.run(
+          randomUUID(),
+          matchCaseId,
+          party,
+          ownerId,
+          termsVersion,
+          termsHash,
+          renterInputVersion,
+          supplyInputVersion,
+          decision,
+          at
+        );
+      } else if (existing.decision !== decision || existing.termsHash !== termsHash || existing.revokedAt) {
+        statements.updateConfirmationDecision.run(decision, termsHash, at, existing.id);
+      }
+      const eventType = decision === "confirmed" ? "party_confirmed" : "party_declined";
+      if (!existing || existing.decision !== decision || existing.termsHash !== termsHash || existing.revokedAt) {
+        statements.insertActorEvent.run(matchCaseId, ownerId, eventType, stableJson({ party, termsVersion, termsHash }), at);
+      }
+      return confirmationFromRow(statements.confirmationByParty.get(matchCaseId, party));
+    });
+  }
+
   return {
     upsertEvaluation,
     invalidate,
@@ -325,11 +415,29 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     participantParty(caseId, ownerId) {
       return statements.participant.get(ownerId, ownerId, caseId, ownerId, ownerId)?.party || null;
     },
+    participant(caseId, ownerId) {
+      const row = statements.participant.get(ownerId, ownerId, caseId, ownerId, ownerId);
+      return row ? {
+        party: row.party,
+        renterOwnerId: row.renter_owner_id,
+        supplyOwnerId: row.supply_owner_id
+      } : null;
+    },
     syncClarifications,
     listClarifications: (caseId) => statements.clarifications.all(caseId).map(clarificationFromRow),
     getClarification: (id, caseId) => clarificationFromRow(statements.clarificationById.get(id, caseId)),
     getClarificationForOwner: (id, caseId, ownerId) => clarificationFromRow(statements.clarificationForOwner.get(id, caseId, ownerId, ownerId)),
     markClarificationAnswered,
+    recordDecision,
+    listConfirmations: (caseId) => statements.confirmations.all(caseId).map(confirmationFromRow),
+    listTerms: (caseId) => statements.allTerms.all(caseId).map((row) => termsFromRow(row, caseId)),
+    setCaseStatus(caseId, status, terminalReason = null, at = clock.nowIso()) {
+      statements.updateCaseStatus.run(status, terminalReason, at, caseId);
+      return hydrate(statements.byId.get(caseId));
+    },
+    revokeConfirmations(caseId, at = clock.nowIso()) {
+      return statements.revokeConfirmations.run(at, caseId).changes;
+    },
     get: (id) => hydrate(statements.byId.get(id)),
     getForOwner: (id, ownerId) => hydrate(statements.forOwner.get(id, ownerId, ownerId)),
     list: () => statements.all.all().map(hydrate),

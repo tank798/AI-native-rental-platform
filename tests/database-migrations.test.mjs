@@ -87,8 +87,8 @@ function createLegacyFixture(filename) {
 }
 
 test("迁移列表版本连续且 SQL 文件全部入库", () => {
-  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3, 4]);
-  assert.equal(latestSchemaVersion, 4);
+  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3, 4, 5]);
+  assert.equal(latestSchemaVersion, 5);
   migrations.forEach((migration) => assert.equal(fs.statSync(migrationSqlPath(migration)).isFile(), true));
 });
 
@@ -189,11 +189,12 @@ test("双边案例、open 澄清、确认和 outbox 去重均由数据库约束"
   assert.throws(() => insertClarification.run("clarification-2", at), /UNIQUE/);
 
   const insertConfirmation = repository.raw.prepare(`
-    INSERT INTO party_confirmations(match_case_id, party, owner_id, terms_version, terms_hash, decision, confirmed_at)
-    VALUES ('case-1', 'renter', 'owner-r', 1, 'hash-1', 'confirmed', ?)
+    INSERT INTO party_confirmations(id, match_case_id, party, owner_id, terms_version, terms_hash,
+                                    renter_input_version, supply_input_version, decision, confirmed_at)
+    VALUES (?, 'case-1', 'renter', 'owner-r', 1, 'hash-1', 1, 1, 'confirmed', ?)
   `);
-  insertConfirmation.run(at);
-  assert.throws(() => insertConfirmation.run(at), /UNIQUE/);
+  insertConfirmation.run("confirmation-1", at);
+  assert.throws(() => insertConfirmation.run("confirmation-2", at), /UNIQUE/);
 
   const insertOutbox = repository.raw.prepare(`
     INSERT INTO outbox_events(id, aggregate_type, aggregate_id, event_type, payload_json, dedupe_key, status, available_at, created_at)

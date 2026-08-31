@@ -6,6 +6,7 @@ import {
 } from "../simulation-engine.mjs";
 import { createClock } from "../clock.mjs";
 import { createClarificationService } from "./clarification-service.mjs";
+import { createConfirmationService } from "./confirmation-service.mjs";
 import { createMatchCaseRepository } from "./match-case-repository.mjs";
 import { createMatchCaseService } from "./match-case-service.mjs";
 import { createTaskRepository } from "./task-repository.mjs";
@@ -77,6 +78,7 @@ export function createMatchingService(repository, { marketMode = "real", clock =
     clock,
     recalculate: (taskId) => processTask(taskId)
   });
+  const confirmations = createConfirmationService({ matchCaseRepository, clock });
   const matchCases = createMatchCaseService({
     taskRepository,
     matchCaseRepository,
@@ -198,6 +200,7 @@ export function createMatchingService(repository, { marketMode = "real", clock =
     marketMode: normalizedMarketMode,
     matchCases,
     clarifications,
+    confirmations,
     matchCaseRepository,
     taskRepository,
     processTask,
