@@ -55,6 +55,14 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
 
   const renterSession = await session(baseUrl);
   const supplySession = await session(baseUrl);
+  const resumedSession = await request(baseUrl, "/api/session", {
+    cookie: supplySession.cookie,
+    method: "POST",
+    body: {}
+  });
+  assert.equal(resumedSession.response.status, 200);
+  assert.equal(resumedSession.payload.userId, supplySession.userId);
+  assert.equal(resumedSession.response.headers.get("set-cookie"), null);
   const health = await request(baseUrl, "/api/health");
   assert.equal(health.payload.database, "sqlite");
   assert.equal(health.payload.continuousMatching, true);

@@ -42,6 +42,21 @@ function candidateFromRow(row) {
   };
 }
 
+function fieldFromRow(row) {
+  if (!row) return null;
+  return {
+    taskId: row.task_id,
+    fieldKey: row.field_key,
+    value: row.value_json === null ? null : parseJsonStrict(row.value_json, `task field ${row.task_id}.${row.field_key}`),
+    source: row.source,
+    confidence: row.confidence === null ? null : Number(row.confidence),
+    confirmationStatus: row.confirmation_status,
+    visibility: row.visibility,
+    version: Number(row.version),
+    updatedAt: row.updated_at
+  };
+}
+
 /** Prepared-statement boundary for versioned tasks and pair projections. */
 export function createTaskRepository({ database, clock = createClock() }) {
   if (!database?.raw || !database?.transaction) throw new Error("task repository requires an open rental database");
@@ -73,7 +88,29 @@ export function createTaskRepository({ database, clock = createClock() }) {
           last_match_at = ?, last_matched_at = ?
       WHERE id = ?
     `),
-    insertEvent: db.prepare("INSERT INTO audit_events(task_id, type, payload_json, created_at) VALUES (?, ?, ?, ?)")
+    insertEvent: db.prepare("INSERT INTO audit_events(task_id, type, payload_json, created_at) VALUES (?, ?, ?, ?)"),
+    fieldByKey: db.prepare("SELECT * FROM task_fields WHERE task_id = ? AND field_key = ?"),
+    upsertField: db.prepare(`
+      INSERT INTO task_fields(task_id, field_key, value_json, source, confidence, confirmation_status, visibility, version, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id, field_key) DO UPDATE SET
+        value_json = excluded.value_json,
+        source = excluded.source,
+        confidence = excluded.confidence,
+        confirmation_status = excluded.confirmation_status,
+        visibility = excluded.visibility,
+        version = excluded.version,
+        updated_at = excluded.updated_at
+    `),
+    updateTaskInput: db.prepare(`
+      UPDATE tasks SET payload_json = ?, input_version = ?, updated_at = ?
+      WHERE id = ? AND input_version = ?
+    `),
+    insertOutbox: db.prepare(`
+      INSERT INTO outbox_events(id, aggregate_type, aggregate_id, event_type, payload_json, dedupe_key, status, available_at, created_at)
+      VALUES (?, 'task', ?, 'task.match_requested', ?, ?, 'pending', ?, ?)
+      ON CONFLICT(dedupe_key) DO NOTHING
+    `)
   };
 
   function upsertCandidate(receiverTaskId, counterpartyId, payload, at = clock.nowIso()) {
@@ -101,6 +138,39 @@ export function createTaskRepository({ database, clock = createClock() }) {
     return taskFromRow(statements.byId.get(taskId));
   }
 
+  function applyFieldAnswer({ taskId, fieldKey, value, nextPayload, visibility = "matching_private", at = clock.nowIso() }) {
+    return database.transaction(() => {
+      const task = taskFromRow(statements.byId.get(taskId));
+      if (!task) throw new Error("task not found");
+      const currentField = fieldFromRow(statements.fieldByKey.get(taskId, fieldKey));
+      const fieldVersion = Number(currentField?.version || 0) + 1;
+      const inputVersion = task.inputVersion + 1;
+      const payload = { ...nextPayload, inputVersion };
+      const updated = statements.updateTaskInput.run(JSON.stringify(payload), inputVersion, at, taskId, task.inputVersion);
+      if (!updated.changes) throw Object.assign(new Error("任务版本已变化"), { status: 409, code: "TASK_VERSION_CONFLICT" });
+      statements.upsertField.run(
+        taskId,
+        fieldKey,
+        JSON.stringify(value),
+        "counterparty_answer",
+        1,
+        "confirmed",
+        visibility,
+        fieldVersion,
+        at
+      );
+      statements.insertOutbox.run(
+        randomUUID(),
+        taskId,
+        JSON.stringify({ taskId, inputVersion }),
+        `task:${taskId}:input:${inputVersion}`,
+        at,
+        at
+      );
+      return { task: taskFromRow(statements.byId.get(taskId)), field: fieldFromRow(statements.fieldByKey.get(taskId, fieldKey)) };
+    });
+  }
+
   return {
     get: (id) => taskFromRow(statements.byId.get(id)),
     listActive: (kind) => statements.activeByKind.all(kind).map(taskFromRow),
@@ -110,6 +180,8 @@ export function createTaskRepository({ database, clock = createClock() }) {
     },
     listInactiveWithCases: () => statements.inactiveWithCases.all().map(taskFromRow),
     listCandidates: (taskId) => statements.candidates.all(taskId).map(candidateFromRow),
+    getField: (taskId, fieldKey) => fieldFromRow(statements.fieldByKey.get(taskId, fieldKey)),
+    applyFieldAnswer,
     upsertCandidate,
     removeCandidate,
     recordMatchRun,

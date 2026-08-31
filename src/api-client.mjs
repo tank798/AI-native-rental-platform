@@ -92,6 +92,17 @@ export function getServerTask(taskId) {
   return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}`);
 }
 
+export function getMatchCase(matchCaseId) {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}`);
+}
+
+export function answerMatchClarification(matchCaseId, clarificationId, answer) {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/clarifications/${encodeURIComponent(clarificationId)}/answers`, {
+    method: "POST",
+    body: JSON.stringify({ answer })
+  });
+}
+
 export function setServerTaskStatus(taskId, status) {
   return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
     method: "PATCH",

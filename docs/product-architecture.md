@@ -167,11 +167,12 @@ flowchart LR
 
 ### 6.2 SQLite 版本与升级边界
 
-本地数据库使用 `PRAGMA user_version` 管理连续版本，当前 schema 版本为 3。迁移顺序由 `src/server/migrations.mjs` 显式声明，对应 SQL 文件为：
+本地数据库使用 `PRAGMA user_version` 管理连续版本，当前 schema 版本为 4。迁移顺序由 `src/server/migrations.mjs` 显式声明，对应 SQL 文件为：
 
 1. `001-baseline.sql`：保留 v0.6 会话、材料、任务、候选和审计事件结构。
 2. `002-task-fields-and-outbox.sql`：增加任务输入版本、字段级真值和去重 outbox。
 3. `003-bilateral-match-cases.sql`：增加双边案例、条款、澄清、确认、联系授权、媒体和案例事件表。
+4. `004-clarification-answer-spec.sql`：为每个澄清问题固化可回答类型、范围、枚举选项和问题生成来源。
 
 每个版本在独立 SQLite 事务中执行；SQL 执行和 `user_version` 更新共同成功后才提交。程序读到更高版本时会拒绝启动，保护新 schema 免受旧程序写入。有表的旧库升级前会先执行 WAL checkpoint，再在同目录生成 `<database>.pre-v<version>.bak` 备份。
 
@@ -181,7 +182,7 @@ flowchart LR
 
 需要数据库，而且不是“每人一个数据库”。本地闭环用 SQLite 验证数据流，生产更合适的方案是同一套 PostgreSQL 中所有用户数据带 `owner_id`，再用行级安全策略做强制隔离。对象存储也按用户与任务分路径并设置同样的访问规则。
 
-本地服务的版本化 schema 已落地会话、材料提交与人工审核、任务与字段真值、候选、双边案例、条款、澄清、确认、联系授权、媒体、outbox 和审计事件表。API 层会在每次读取任务和证据时检查当前会话的 `owner_id`；生产 PostgreSQL 适配器将同一所有权语义下沉为数据库 RLS，并沿用相同的服务端公开投影边界。
+本地服务的版本化 schema 已落地会话、材料提交与人工审核、任务与字段真值、候选、双边案例、条款、澄清、确认、联系授权、媒体、outbox 和审计事件表。案例 API 先确认调用者是租客或出租方，再只返回本人待回答问题；对方问题仅返回数量和粗粒度类别。澄清答案与字段新版本、案例事件和 outbox 在同一事务写入，提交后立即触发配对重算。API 层会在每次读取任务、证据和匹配案例时检查当前会话的 `owner_id`；生产 PostgreSQL 适配器将同一所有权语义下沉为数据库 RLS，并沿用相同的服务端公开投影边界。
 
 ### 7.1 核心表
 

@@ -51,6 +51,26 @@ function caseFromRow(row) {
   };
 }
 
+function clarificationFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    matchCaseId: row.match_case_id,
+    termsVersion: row.terms_version === null ? null : Number(row.terms_version),
+    targetParty: row.target_party,
+    fieldKey: row.field_key,
+    question: row.question,
+    reasonCode: row.reason_code,
+    priority: Number(row.priority),
+    status: row.status,
+    answerSpec: parseJsonStrict(row.answer_spec_json || "{}", `clarification spec ${row.id}`),
+    rawAnswer: row.raw_answer,
+    structuredAnswer: row.structured_answer_json ? parseJsonStrict(row.structured_answer_json, `clarification answer ${row.id}`) : null,
+    createdAt: row.created_at,
+    answeredAt: row.answered_at || null
+  };
+}
+
 /** Persists the unique, participant-scoped state for one real task pair. */
 export function createMatchCaseRepository({ database, clock = createClock() }) {
   if (!database?.raw || !database?.transaction) throw new Error("match case repository requires an open rental database");
@@ -98,7 +118,47 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     reactivateTerms: db.prepare("UPDATE match_terms SET invalidated_at = NULL WHERE match_case_id = ? AND version = ?"),
     invalidateOtherTerms: db.prepare("UPDATE match_terms SET invalidated_at = ? WHERE match_case_id = ? AND version <> ? AND invalidated_at IS NULL"),
     insertEvent: db.prepare("INSERT INTO match_events(match_case_id, actor_owner_id, type, payload_json, created_at) VALUES (?, NULL, ?, ?, ?)"),
-    events: db.prepare("SELECT * FROM match_events WHERE match_case_id = ? ORDER BY id ASC")
+    events: db.prepare("SELECT * FROM match_events WHERE match_case_id = ? ORDER BY id ASC"),
+    participant: db.prepare(`
+      SELECT CASE WHEN renter.owner_id = ? THEN 'renter' WHEN supply.owner_id = ? THEN 'supply' END AS party
+      FROM match_cases AS cases
+      JOIN tasks AS renter ON renter.id = cases.renter_task_id
+      JOIN tasks AS supply ON supply.id = cases.supply_task_id
+      WHERE cases.id = ? AND (renter.owner_id = ? OR supply.owner_id = ?)
+    `),
+    clarifications: db.prepare("SELECT * FROM clarification_requests WHERE match_case_id = ? ORDER BY priority DESC, created_at ASC"),
+    clarificationById: db.prepare("SELECT * FROM clarification_requests WHERE id = ? AND match_case_id = ?"),
+    clarificationForOwner: db.prepare(`
+      SELECT requests.* FROM clarification_requests AS requests
+      JOIN match_cases AS cases ON cases.id = requests.match_case_id
+      JOIN tasks AS renter ON renter.id = cases.renter_task_id
+      JOIN tasks AS supply ON supply.id = cases.supply_task_id
+      WHERE requests.id = ? AND requests.match_case_id = ?
+        AND ((requests.target_party = 'renter' AND renter.owner_id = ?)
+          OR (requests.target_party = 'supply' AND supply.owner_id = ?))
+    `),
+    insertClarification: db.prepare(`
+      INSERT INTO clarification_requests(id, match_case_id, terms_version, target_party, field_key, question,
+                                         reason_code, priority, status, answer_spec_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+      ON CONFLICT DO NOTHING
+    `),
+    updateOpenClarification: db.prepare(`
+      UPDATE clarification_requests
+      SET terms_version = ?, question = ?, reason_code = ?, priority = ?, answer_spec_json = ?
+      WHERE match_case_id = ? AND target_party = ? AND field_key = ? AND status = 'open'
+    `),
+    supersedeClarification: db.prepare("UPDATE clarification_requests SET status = 'superseded' WHERE id = ? AND status = 'open'"),
+    answeredField: db.prepare(`
+      SELECT 1 AS answered FROM clarification_requests
+      WHERE match_case_id = ? AND target_party = ? AND field_key = ? AND status = 'answered'
+      LIMIT 1
+    `),
+    answerClarification: db.prepare(`
+      UPDATE clarification_requests
+      SET status = 'answered', raw_answer = ?, structured_answer_json = ?, answered_at = ?
+      WHERE id = ? AND status = 'open'
+    `)
   };
 
   function assertPair(renterTaskId, supplyTaskId) {
@@ -207,6 +267,53 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     });
   }
 
+  function syncClarifications(matchCaseId, questions, at = clock.nowIso()) {
+    return database.transaction(() => {
+      const desired = new Set(questions.map((question) => `${question.targetParty}\u0000${question.fieldKey}`));
+      const existing = statements.clarifications.all(matchCaseId).map(clarificationFromRow);
+      for (const item of existing) {
+        if (item.status === "open" && !desired.has(`${item.targetParty}\u0000${item.fieldKey}`)) {
+          statements.supersedeClarification.run(item.id);
+        }
+      }
+      const matchCase = statements.byId.get(matchCaseId);
+      for (const question of questions) {
+        if (statements.answeredField.get(matchCaseId, question.targetParty, question.fieldKey)) continue;
+        const answerSpecJson = stableJson({ ...question.answerSpec, provider: question.provider || "rule_template" });
+        const updated = statements.updateOpenClarification.run(
+          matchCase.current_terms_version,
+          question.question,
+          question.reasonCode,
+          question.priority,
+          answerSpecJson,
+          matchCaseId,
+          question.targetParty,
+          question.fieldKey
+        );
+        if (updated.changes) continue;
+        statements.insertClarification.run(
+          randomUUID(),
+          matchCaseId,
+          matchCase.current_terms_version,
+          question.targetParty,
+          question.fieldKey,
+          question.question,
+          question.reasonCode,
+          question.priority,
+          answerSpecJson,
+          at
+        );
+      }
+      return statements.clarifications.all(matchCaseId).map(clarificationFromRow);
+    });
+  }
+
+  function markClarificationAnswered(id, matchCaseId, rawAnswer, structuredAnswer, at = clock.nowIso()) {
+    const result = statements.answerClarification.run(String(rawAnswer), stableJson(structuredAnswer), at, id);
+    if (result.changes) statements.insertEvent.run(matchCaseId, "clarification_answered", stableJson({ clarificationId: id }), at);
+    return clarificationFromRow(statements.clarificationById.get(id, matchCaseId));
+  }
+
   return {
     upsertEvaluation,
     invalidate,
@@ -215,6 +322,14 @@ export function createMatchCaseRepository({ database, clock = createClock() }) {
     },
     findByPair: (renterTaskId, supplyTaskId) => hydrate(statements.byPair.get(renterTaskId, supplyTaskId)),
     listForTask: (taskId) => statements.casesForTask.all(taskId, taskId).map(hydrate),
+    participantParty(caseId, ownerId) {
+      return statements.participant.get(ownerId, ownerId, caseId, ownerId, ownerId)?.party || null;
+    },
+    syncClarifications,
+    listClarifications: (caseId) => statements.clarifications.all(caseId).map(clarificationFromRow),
+    getClarification: (id, caseId) => clarificationFromRow(statements.clarificationById.get(id, caseId)),
+    getClarificationForOwner: (id, caseId, ownerId) => clarificationFromRow(statements.clarificationForOwner.get(id, caseId, ownerId, ownerId)),
+    markClarificationAnswered,
     get: (id) => hydrate(statements.byId.get(id)),
     getForOwner: (id, ownerId) => hydrate(statements.forOwner.get(id, ownerId, ownerId)),
     list: () => statements.all.all().map(hydrate),

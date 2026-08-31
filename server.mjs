@@ -127,6 +127,54 @@ function publicTask(task) {
   };
 }
 
+function clarificationCategory(reasonCode) {
+  const reason = String(reasonCode || "");
+  if (/(?:ROLE|RIGHTS|VERIFICATION|SAFETY|IDENTITY)/u.test(reason)) return "资格与安全";
+  if (/(?:LOCATION|CITY|COMMUTE|MOVE_IN|REQUIRED_FACILITY|HOUSING)/u.test(reason)) return "核心居住条件";
+  if (/(?:BUDGET|RENT|LEASE|FEE|TOTAL_COST)/u.test(reason)) return "价格与租期";
+  if (/(?:ROOMMATE|VIEWING|SCHEDULE)/u.test(reason)) return "居住与看房安排";
+  return "其他匹配条件";
+}
+
+/** Builds the same owner-scoped case view for GET and mutation responses. */
+function publicMatchCase(matching, matchCase, ownerId) {
+  const party = matching.matchCaseRepository.participantParty(matchCase.id, ownerId);
+  if (!party) return null;
+  const open = matching.matchCaseRepository
+    .listClarifications(matchCase.id)
+    .filter((item) => item.status === "open");
+  const ownQuestions = open
+    .filter((item) => item.targetParty === party)
+    .map((item) => ({
+      id: item.id,
+      fieldKey: item.fieldKey,
+      question: item.question,
+      category: clarificationCategory(item.reasonCode),
+      priority: item.priority,
+      answerSpec: item.answerSpec,
+      createdAt: item.createdAt
+    }));
+  const otherQuestions = open.filter((item) => item.targetParty !== party);
+  return {
+    id: matchCase.id,
+    status: matchCase.status,
+    party,
+    currentTermsVersion: matchCase.currentTermsVersion,
+    terms: matchCase.terms ? {
+      version: matchCase.terms.version,
+      publicTerms: matchCase.terms.publicTerms,
+      nonBlockingUnknowns: matchCase.terms.nonBlockingUnknowns
+    } : null,
+    clarifications: {
+      questions: ownQuestions,
+      otherPendingCount: otherQuestions.length,
+      otherPendingCategories: [...new Set(otherQuestions.map((item) => clarificationCategory(item.reasonCode)))]
+    },
+    expiresAt: matchCase.expiresAt,
+    updatedAt: matchCase.updatedAt
+  };
+}
+
 function validateRenterPayload(payload) {
   const mandate = structuredClone(payload?.mandate || {});
   const errors = [];
@@ -348,6 +396,10 @@ export function createRentalServer(options = {}) {
     if (request.method === "POST" && url.pathname === "/api/session") {
       assertSameOrigin(request);
       await readJson(request);
+      const existing = sessionFor(request);
+      if (existing) {
+        return json(response, 200, { userId: existing.id, expiresAt: existing.expiresAt });
+      }
       enforceSessionCreationLimit(request);
       const issued = sessions.createAnonymousSession();
       return json(response, 201, issued.publicSession, { "Set-Cookie": issued.setCookie });
@@ -393,6 +445,33 @@ export function createRentalServer(options = {}) {
     if (request.method === "GET" && url.pathname === "/api/tasks") {
       const tasks = repository.listTasksForOwner(session.id).map(publicTask);
       return json(response, 200, { tasks });
+    }
+
+    const clarificationAnswerMatch = url.pathname.match(/^\/api\/matches\/([^/]+)\/clarifications\/([^/]+)\/answers$/);
+    if (request.method === "POST" && clarificationAnswerMatch) {
+      assertSameOrigin(request);
+      enforceWriteLimit(request, session);
+      const matchCaseId = decodeURIComponent(clarificationAnswerMatch[1]);
+      const clarificationId = decodeURIComponent(clarificationAnswerMatch[2]);
+      const body = await readJson(request);
+      const answered = await matching.clarifications.answer({
+        matchCaseId,
+        clarificationId,
+        ownerId: session.id,
+        rawAnswer: body.answer
+      });
+      const matchCase = matching.matchCaseRepository.getForOwner(matchCaseId, session.id);
+      return json(response, 200, {
+        matchCase: publicMatchCase(matching, matchCase, session.id),
+        answer: { clarificationId, idempotent: answered.idempotent }
+      });
+    }
+
+    const matchCaseMatch = url.pathname.match(/^\/api\/matches\/([^/]+)$/);
+    if (request.method === "GET" && matchCaseMatch) {
+      const matchCase = matching.matchCaseRepository.getForOwner(decodeURIComponent(matchCaseMatch[1]), session.id);
+      if (!matchCase) return json(response, 404, { error: "匹配案例不存在", code: "MATCH_CASE_NOT_FOUND" });
+      return json(response, 200, { matchCase: publicMatchCase(matching, matchCase, session.id) });
     }
 
     const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);

@@ -12,7 +12,7 @@ function counterpartId(matchCase, taskId) {
 }
 
 /** Coordinates one symmetric write for case state and both candidate views. */
-export function createMatchCaseService({ taskRepository, matchCaseRepository, clock = createClock() }) {
+export function createMatchCaseService({ taskRepository, matchCaseRepository, clock = createClock(), onCaseEvaluated = null }) {
   if (!taskRepository || !matchCaseRepository) throw new Error("match case service requires task and case repositories");
 
   function projectionForRenter(evaluation, matchCase, supplyTask) {
@@ -62,7 +62,9 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, cl
         if (current) matchCaseRepository.invalidate(current.id, "hard_conflict", "invalidated", evaluatedAt);
         changes.set(renterTask.id, taskRepository.removeCandidate(renterTask.id, supplyTask.id));
         changes.set(supplyTask.id, taskRepository.removeCandidate(supplyTask.id, renterTask.id));
-        return { matchCase: current ? matchCaseRepository.get(current.id) : null, evaluation, changes };
+        const invalidated = current ? matchCaseRepository.get(current.id) : null;
+        if (invalidated) onCaseEvaluated?.({ matchCase: invalidated, evaluation, renterTask, supplyTask });
+        return { matchCase: invalidated, evaluation, changes };
       }
 
       const matchCase = matchCaseRepository.upsertEvaluation({
@@ -79,6 +81,7 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, cl
         supplyTask.id,
         taskRepository.upsertCandidate(supplyTask.id, renterTask.id, projectionForSupply(evaluation, matchCase, renterTask), evaluatedAt)
       );
+      onCaseEvaluated?.({ matchCase, evaluation, renterTask, supplyTask });
       return { matchCase, evaluation, changes };
     });
   }

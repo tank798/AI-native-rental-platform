@@ -25,9 +25,11 @@ import {
   renewTaskLifecycle
 } from "./task-lifecycle.mjs";
 import {
+  answerMatchClarification,
   createServerTask,
   ensureServerSession,
   getEvidenceStatus,
+  getMatchCase,
   getServerHealth,
   getServerTask,
   listServerTasks,
@@ -193,6 +195,10 @@ function initialProductState() {
     result: null,
     supplyResult: null,
     activeCandidateId: null,
+    activeMatchCase: null,
+    activeMatchCaseLoading: false,
+    activeMatchCaseError: null,
+    clarificationSubmitting: null,
     reportType: "broker_or_fee",
     reportHasEvidence: false,
     reportResult: null,
@@ -343,6 +349,9 @@ function syncExpiredTask() {
   state.result = null;
   state.supplyResult = null;
   state.activeCandidateId = null;
+  state.activeMatchCase = null;
+  state.activeMatchCaseLoading = false;
+  state.activeMatchCaseError = null;
 }
 
 function mandateFromAnswers() {
@@ -728,6 +737,12 @@ function roomVisualClass(listingId) {
   return "room-three";
 }
 
+function minuteLabel(value) {
+  if (value === null || value === undefined || value === "") return "待确认";
+  const minutes = Number(value);
+  return Number.isFinite(minutes) ? `${minutes} 分钟` : "待确认";
+}
+
 function candidateCard(candidate, index) {
   const listing = candidate.listing;
   const selectionLabel = String(candidate.selectionLabel || "")
@@ -736,14 +751,16 @@ function candidateCard(candidate, index) {
     .replace("居住条件最好", "住得好");
   return `<article class="candidate-card"><button data-action="open-candidate" data-id="${escapeAttribute(listing.id)}">
     <div class="candidate-photo ${roomVisualClass(listing.id)}"><span>0${index + 1}</span><b>${escapeText(selectionLabel)}</b></div>
-    <div class="candidate-copy"><div><h2>${escapeText(listing.shortTitle)}</h2><strong>¥${formatInteger(candidate.agreedRent)}<small>/月</small></strong></div><p>${escapeText(listing.station)} · 步行 ${escapeText(listing.walkMinutes)} 分钟 · 通勤 ${escapeText(listing.commuteMinutes)} 分钟</p><div class="candidate-tags"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.roommateCount)} 位室友</span><span>${escapeText(candidate.caveats[0] || "条件无冲突")}</span></div></div>
+    <div class="candidate-copy"><div><h2>${escapeText(listing.shortTitle)}</h2><strong>¥${formatInteger(candidate.agreedRent)}<small>/月</small></strong></div><p>${escapeText(listing.station)} · 步行 ${minuteLabel(listing.walkMinutes)} · 通勤 ${minuteLabel(listing.commuteMinutes)}</p><div class="candidate-tags"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.roommateCount)} 位室友</span><span>${escapeText(candidate.caveats[0] || "条件无冲突")}</span></div></div>
   </button></article>`;
 }
 
 function tenantCard(candidate, index) {
   const alias = candidate.displayAlias || candidate.tenant.alias;
-  const lease = candidate.tenant.mandate.leaseFlexible ? "租期灵活" : `${candidate.tenant.mandate.leaseMonths} 个月`;
-  return `<article class="tenant-card"><button data-action="contact-tenant"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><div class="tenant-main"><div><h2>${escapeText(alias)}</h2><b>${escapeText(candidate.selectionLabel)}</b></div><p>${escapeText(candidate.tenant.occupation)} · ${escapeText(lease)} · ${escapeText(candidate.tenant.mandate.moveInWindow.from.slice(5))} 起</p><strong>¥${formatInteger(candidate.agreedRent)} / 月</strong></div>${icon("arrow")}</button></article>`;
+  const mandate = candidate.tenant.mandate || {};
+  const lease = mandate.leaseFlexible ? "租期灵活" : mandate.leaseMonths ? `${mandate.leaseMonths} 个月` : "租期待确认";
+  const moveIn = mandate.moveInWindow?.from ? `${mandate.moveInWindow.from.slice(5)} 起` : "入住日待确认";
+  return `<article class="tenant-card"><button data-action="open-candidate" data-id="${escapeAttribute(candidate.tenant.id)}"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><div class="tenant-main"><div><h2>${escapeText(alias)}</h2><b>${escapeText(candidate.selectionLabel)}</b></div><p>${escapeText(candidate.tenant.occupation)} · ${escapeText(lease)} · ${escapeText(moveIn)}</p><strong>${candidate.agreedRent ? `¥${formatInteger(candidate.agreedRent)} / 月` : "价格待确认"}</strong></div>${icon("arrow")}</button></article>`;
 }
 
 function resultsScreen() {
@@ -834,14 +851,73 @@ function rootScreen() {
 }
 
 function activeCandidate() {
-  return state.result?.candidates.find((candidate) => candidate.listing.id === state.activeCandidateId) || null;
+  const candidates = state.task?.kind === "supply" ? state.supplyResult?.candidates : state.result?.candidates;
+  return candidates?.find((candidate) => (candidate.listing?.id || candidate.tenant?.id) === state.activeCandidateId) || null;
+}
+
+function clarificationOptionLabel(value) {
+  return ({
+    true: "是",
+    false: "否",
+    included: "已含在月租",
+    actual_bill: "按账单另付",
+    fixed_extra: "固定金额另付",
+    unknown: "暂不确定",
+    female: "女生",
+    male: "男生",
+    none: "没有室友"
+  })[String(value)] || String(value);
+}
+
+function clarificationControl(question) {
+  const spec = question.answerSpec || {};
+  const type = spec.expectedAnswerType;
+  const busy = state.clarificationSubmitting === question.id;
+  if (type === "boolean" || type === "enum") {
+    return `<div class="clarification-options">${(spec.options || []).map((option) => `<button data-action="answer-clarification-option" data-id="${escapeAttribute(question.id)}" data-value="${escapeAttribute(String(option))}" ${busy ? "disabled" : ""}>${escapeText(clarificationOptionLabel(option))}</button>`).join("")}</div>`;
+  }
+  if (type === "date_range") {
+    return `<div class="clarification-entry date-range"><label>最早日期<input type="date" data-clarification-from="${escapeAttribute(question.id)}" /></label><label>最晚日期<input type="date" data-clarification-to="${escapeAttribute(question.id)}" /></label><button data-action="submit-clarification" data-id="${escapeAttribute(question.id)}" data-type="date_range" ${busy ? "disabled" : ""}>提交</button></div>`;
+  }
+  const inputType = type === "number" ? "number" : type === "date" ? "date" : "text";
+  const bounds = type === "number" ? ` min="${escapeAttribute(spec.minimum)}" max="${escapeAttribute(spec.maximum)}"` : "";
+  return `<div class="clarification-entry"><input type="${inputType}"${bounds} maxlength="${escapeAttribute(spec.maximumLength || 120)}" data-clarification-value="${escapeAttribute(question.id)}" aria-label="${escapeAttribute(question.question)}" /><button data-action="submit-clarification" data-id="${escapeAttribute(question.id)}" data-type="${escapeAttribute(type)}" ${busy ? "disabled" : ""}>提交</button></div>`;
+}
+
+function termsSummary(matchCase) {
+  const terms = matchCase?.terms?.publicTerms;
+  if (!terms) return "";
+  const rent = terms.rent ? `¥${formatInteger(terms.rent)}/月` : "月租待确认";
+  const lease = terms.leaseMonths ? `${escapeText(terms.leaseMonths)} 个月` : "租期待确认";
+  const moveIn = terms.moveInWindow?.from ? `${escapeText(terms.moveInWindow.from)} 起` : "入住日待确认";
+  return `<div class="case-terms"><span>${rent}</span><span>${lease}</span><span>${moveIn}</span></div>`;
+}
+
+function matchClarificationSection(candidate) {
+  if (!candidate.matchCaseId) return `<section class="case-progress-card"><h2>匹配进度</h2><p>演示候选不创建真实双边案例。</p></section>`;
+  if (state.activeMatchCaseLoading) return `<section class="case-progress-card is-loading"><h2>正在读取双方进度</h2><p>只会显示你本人需要补充的内容。</p></section>`;
+  if (state.activeMatchCaseError) return `<section class="case-progress-card is-error"><h2>暂时无法读取匹配进度</h2><p>${escapeText(state.activeMatchCaseError)}</p><button data-action="retry-match-case">重试</button></section>`;
+  const matchCase = state.activeMatchCase;
+  if (!matchCase) return "";
+  const questions = matchCase.clarifications?.questions || [];
+  const otherCount = Number(matchCase.clarifications?.otherPendingCount || 0);
+  const otherCategories = matchCase.clarifications?.otherPendingCategories || [];
+  const ready = matchCase.status === "terms_ready";
+  const statusText = ready ? "核心条件已经匹配" : questions.length ? "需要你补充信息" : otherCount ? "正在等待对方补充" : "正在重新核对条件";
+  return `<section class="case-progress-card ${ready ? "is-ready" : ""}">
+    <header><div><span>双边匹配 · 条款 v${escapeText(matchCase.currentTermsVersion || "—")}</span><h2>${statusText}</h2></div><i>${ready ? "可确认" : "核对中"}</i></header>
+    ${termsSummary(matchCase)}
+    ${questions.map((question) => `<article class="match-question"><span>${escapeText(question.category)}</span><h3>${escapeText(question.question)}</h3>${question.answerSpec?.provider === "rule_fallback" ? "<p>AI 暂不可用，已切换规则问题</p>" : ""}${clarificationControl(question)}</article>`).join("")}
+    ${otherCount ? `<p class="counterparty-pending">对方还有 ${otherCount} 项待补充${otherCategories.length ? `：${escapeText(otherCategories.join("、"))}` : ""}。未公开答案不会显示。</p>` : ""}
+    ${state.clarificationSubmitting ? '<p class="recalculating" role="status">正在写入新版本并重新匹配…</p>' : ""}
+  </section>`;
 }
 
 function listingShareText(candidate) {
   const listing = candidate.listing;
   return [
     `${listing.shortTitle}｜¥${formatInteger(candidate.agreedRent)}/月`,
-    `${listing.station}，步行 ${listing.walkMinutes} 分钟，通勤约 ${listing.commuteMinutes} 分钟`,
+    `${listing.station}，步行${minuteLabel(listing.walkMinutes)}，通勤${minuteLabel(listing.commuteMinutes)}`,
     `${listing.room.areaSqm}㎡，${listing.room.floor}/${listing.room.totalFloors} 层，${listing.room.roommateCount} 位室友`,
     `入住：${listing.availableFrom}`,
     candidate.reasons.slice(0, 2).join("；"),
@@ -881,18 +957,67 @@ async function shareCandidate(candidate) {
   }
 }
 
+async function loadActiveMatchCase() {
+  const candidate = activeCandidate();
+  const requestedId = candidate?.matchCaseId || null;
+  state.activeMatchCase = null;
+  state.activeMatchCaseError = null;
+  state.activeMatchCaseLoading = Boolean(requestedId);
+  render();
+  if (!requestedId) return;
+  try {
+    const { matchCase } = await getMatchCase(requestedId);
+    if (activeCandidate()?.matchCaseId !== requestedId) return;
+    state.activeMatchCase = matchCase;
+  } catch (error) {
+    if (activeCandidate()?.matchCaseId !== requestedId) return;
+    state.activeMatchCaseError = error.message || "匹配进度读取失败";
+  } finally {
+    if (activeCandidate()?.matchCaseId === requestedId) {
+      state.activeMatchCaseLoading = false;
+      render();
+    }
+  }
+}
+
+async function submitClarification(clarificationId, answer) {
+  const candidate = activeCandidate();
+  if (!candidate?.matchCaseId || state.clarificationSubmitting) return;
+  state.clarificationSubmitting = clarificationId;
+  render();
+  try {
+    const response = await answerMatchClarification(candidate.matchCaseId, clarificationId, answer);
+    state.activeMatchCase = response.matchCase;
+    if (state.task?.remoteId) applyServerSnapshot(await getServerTask(state.task.remoteId), { renderNow: false });
+    state.clarificationSubmitting = null;
+    if (!activeCandidate()) {
+      state.page = "root";
+      state.tab = "results";
+      showToast("新信息与对方条件冲突，已移出候选");
+      return;
+    }
+    showToast(response.answer?.idempotent ? "这个答案已经保存" : "已保存，匹配结果已重新计算");
+  } catch (error) {
+    state.clarificationSubmitting = null;
+    showToast(error.message || "回答提交失败");
+  }
+}
+
 function candidateDetail() {
   const candidate = activeCandidate();
   if (!candidate) return resultsScreen();
+  if (state.task?.kind === "supply") return tenantDetail(candidate);
   const listing = candidate.listing;
+  const awaitingClarification = state.activeMatchCase?.status === "clarifying";
+  const realCase = Boolean(candidate.matchCaseId);
   return `<section class="detail-screen">
     <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><button data-action="open-share" aria-label="分享房源">${icon("share")}</button></div>
     <div class="detail-photo ${roomVisualClass(listing.id)}"></div>
     <div class="detail-sheet">
-      <div class="detail-title"><div><h1>${escapeText(listing.shortTitle)}</h1><p>${escapeText(listing.station)} · 步行 ${escapeText(listing.walkMinutes)} 分钟</p></div><b>¥${formatInteger(candidate.agreedRent)}<small>/月</small></b></div>
+      <div class="detail-title"><div><h1>${escapeText(listing.shortTitle)}</h1><p>${escapeText(listing.station)} · 步行${minuteLabel(listing.walkMinutes)}</p></div><b>¥${formatInteger(candidate.agreedRent)}<small>/月</small></b></div>
       <div class="detail-facts"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.floor)}/${escapeText(listing.room.totalFloors)} 层</span><span>${escapeText(listing.room.roommateCount)} 位室友</span></div>
-      <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button><button data-action="copy-contact">${icon("contact")}<span>${state.contactUnlocked ? "复制微信号" : "交换联系"}</span></button></div>
-      ${state.contactUnlocked ? `<section class="contact-card"><span>微信号</span><b>zhunaer_demo</b><button data-action="copy-contact">复制</button></section>` : ""}
+      <div class="detail-actions"><button data-action="copy-listing">${icon("copy")}<span>复制摘要</span></button><button data-action="open-share">${icon("share")}<span>转发房源</span></button><button ${realCase ? "disabled" : 'data-action="copy-contact"'}>${icon("contact")}<span>${realCase ? "确认后开放" : state.contactUnlocked ? "复制微信号" : "交换联系"}</span></button></div>
+      ${!realCase && state.contactUnlocked ? `<section class="contact-card"><span>微信号</span><b>zhunaer_demo</b><button data-action="copy-contact">复制</button></section>` : ""}
       <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
       <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需本人现场确认</p>"}</section>
       <section class="source-card"><h2>资料来源</h2>${candidate.provenance.map((item) => `<div><span>${escapeText(item.label)}</span><b>${escapeText(item.value)}</b><em>${escapeText(item.source)}</em></div>`).join("")}</section>
@@ -901,7 +1026,26 @@ function candidateDetail() {
         const side = event.actor === "出租 AI" ? "is-supply" : event.actor === "双方 AI" ? "is-both" : "is-renter";
         return `<div class="agent-dialogue-row ${side}"><span>${actor}</span><div><b>${escapeText(event.title)}</b><p>${escapeText(event.detail)}</p></div></div>`;
       }).join("")}</section>
-      <button class="primary-button" data-action="confirm-candidate">${state.contactUnlocked ? "已完成双方确认" : "双方确认并交换联系方式"}</button><button class="report-link" data-action="open-report">举报房源</button>
+      ${matchClarificationSection(candidate)}
+      <button class="primary-button" data-action="confirm-candidate" ${awaitingClarification ? "disabled" : ""}>${awaitingClarification ? "先完成匹配信息核对" : state.contactUnlocked ? "已完成双方确认" : "双方确认并交换联系方式"}</button><button class="report-link" data-action="open-report">举报房源</button>
+    </div>
+  </section>`;
+}
+
+function tenantDetail(candidate) {
+  const tenant = candidate.tenant;
+  const alias = candidate.displayAlias || tenant.alias;
+  const mandate = tenant.mandate || {};
+  const awaitingClarification = state.activeMatchCase?.status === "clarifying";
+  return `<section class="detail-screen tenant-detail-screen">
+    <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><span></span></div>
+    <div class="tenant-detail-hero"><span class="tenant-avatar">${escapeText(alias.slice(0, 1))}</span><h1>${escapeText(alias)}</h1><p>${escapeText(tenant.occupation)}</p></div>
+    <div class="detail-sheet">
+      <div class="detail-facts"><span>${mandate.leaseFlexible ? "租期灵活" : `${escapeText(mandate.leaseMonths)} 个月`}</span><span>${escapeText(mandate.moveInWindow?.from || "入住日待定")}</span><span>最长通勤 ${escapeText(mandate.maxCommuteMinutes || "—")} 分钟</span></div>
+      <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
+      <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需双方完成条款确认</p>"}</section>
+      ${matchClarificationSection(candidate)}
+      <button class="primary-button" data-action="confirm-candidate" ${awaitingClarification ? "disabled" : ""}>${awaitingClarification ? "先完成匹配信息核对" : "确认匹配意向"}</button>
     </div>
   </section>`;
 }
@@ -937,7 +1081,10 @@ function photoSheet() {
 function shareSheet() {
   const candidate = activeCandidate();
   if (!candidate) return "";
-  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo ${roomVisualClass(candidate.listing.id)}"></div><div><b>${escapeText(candidate.listing.shortTitle)}</b><span>¥${formatInteger(candidate.agreedRent)}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button><button class="source-option" data-action="copy-contact">${icon("contact")}<span>复制联系方式</span>${icon("arrow")}</button></section></div>`;
+  const contactAction = candidate.matchCaseId
+    ? `<button class="source-option" disabled>${icon("contact")}<span>双方确认后开放联系方式</span>${icon("lock")}</button>`
+    : `<button class="source-option" data-action="copy-contact">${icon("contact")}<span>复制联系方式</span>${icon("arrow")}</button>`;
+  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo ${roomVisualClass(candidate.listing.id)}"></div><div><b>${escapeText(candidate.listing.shortTitle)}</b><span>¥${formatInteger(candidate.agreedRent)}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button>${contactAction}</section></div>`;
 }
 
 function labSheet() {
@@ -1184,6 +1331,9 @@ async function initializeServerState() {
       state.result = null;
       state.supplyResult = null;
       state.activeCandidateId = null;
+      state.activeMatchCase = null;
+      state.activeMatchCaseLoading = false;
+      state.activeMatchCaseError = null;
       render();
     }
   } catch (error) {
@@ -1283,6 +1433,10 @@ function resetAll() {
     result: null,
     supplyResult: null,
     activeCandidateId: null,
+    activeMatchCase: null,
+    activeMatchCaseLoading: false,
+    activeMatchCaseError: null,
+    clarificationSubmitting: null,
     reportResult: null,
     taskNotices: [{ ...demoRenewalTask, lifecycle: createTaskLifecycle(addDaysToIso(todayInShanghai(), -25)) }],
     archivedTasks: [],
@@ -1515,8 +1669,25 @@ app.addEventListener("click", async (event) => {
       }
       break;
     }
-    case "open-candidate": state.activeCandidateId = target.dataset.id; state.page = "candidate"; render(); break;
-    case "back-root": state.page = "root"; state.tab = "results"; render(); break;
+    case "open-candidate": state.activeCandidateId = target.dataset.id; state.page = "candidate"; await loadActiveMatchCase(); break;
+    case "back-root": state.page = "root"; state.tab = "results"; state.activeMatchCase = null; state.activeMatchCaseError = null; render(); break;
+    case "retry-match-case": await loadActiveMatchCase(); break;
+    case "answer-clarification-option": await submitClarification(target.dataset.id, target.dataset.value); break;
+    case "submit-clarification": {
+      const clarificationId = target.dataset.id;
+      let answer;
+      if (target.dataset.type === "date_range") {
+        answer = {
+          from: app.querySelector(`[data-clarification-from="${CSS.escape(clarificationId)}"]`)?.value,
+          to: app.querySelector(`[data-clarification-to="${CSS.escape(clarificationId)}"]`)?.value
+        };
+      } else {
+        answer = app.querySelector(`[data-clarification-value="${CSS.escape(clarificationId)}"]`)?.value;
+      }
+      if (!answer || typeof answer === "object" && (!answer.from || !answer.to)) { showToast("请先填写答案"); break; }
+      await submitClarification(clarificationId, answer);
+      break;
+    }
     case "confirm-candidate":
       if (!state.contactUnlocked) state.stats.confirmed += 1;
       state.contactUnlocked = true;

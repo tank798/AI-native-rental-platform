@@ -5,6 +5,7 @@ import {
   matchSupplyDraft
 } from "../simulation-engine.mjs";
 import { createClock } from "../clock.mjs";
+import { createClarificationService } from "./clarification-service.mjs";
 import { createMatchCaseRepository } from "./match-case-repository.mjs";
 import { createMatchCaseService } from "./match-case-service.mjs";
 import { createTaskRepository } from "./task-repository.mjs";
@@ -70,7 +71,18 @@ export function createMatchingService(repository, { marketMode = "real", clock =
   const normalizedMarketMode = normalizeMarketMode(marketMode);
   const taskRepository = createTaskRepository({ database: repository, clock });
   const matchCaseRepository = createMatchCaseRepository({ database: repository, clock });
-  const matchCases = createMatchCaseService({ taskRepository, matchCaseRepository, clock });
+  const clarifications = createClarificationService({
+    taskRepository,
+    matchCaseRepository,
+    clock,
+    recalculate: (taskId) => processTask(taskId)
+  });
+  const matchCases = createMatchCaseService({
+    taskRepository,
+    matchCaseRepository,
+    clock,
+    onCaseEvaluated: (context) => clarifications.syncForCase(context)
+  });
 
   function renterPool(task) {
     const userListings = repository.listOppositeTasks("renter", task.ownerId).map((supplyTask, index) => {
@@ -185,6 +197,7 @@ export function createMatchingService(repository, { marketMode = "real", clock =
   return {
     marketMode: normalizedMarketMode,
     matchCases,
+    clarifications,
     matchCaseRepository,
     taskRepository,
     processTask,

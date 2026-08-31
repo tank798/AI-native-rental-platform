@@ -46,6 +46,10 @@ function verificationReady(draft) {
 }
 
 function renterCandidateProjection(draft, evaluation) {
+  const routeMinutes = Object.values(draft.commuteMinutesByDestination || {})
+    .map(numberOrNull)
+    .filter((value) => value !== null);
+  const projectedCommuteMinutes = routeMinutes.length ? Math.max(...routeMinutes) : numberOrNull(draft.commuteMinutes);
   return {
     counterpartyType: "task",
     matchCaseStatus: evaluation.status,
@@ -53,12 +57,20 @@ function renterCandidateProjection(draft, evaluation) {
     reasons: [...evaluation.publicReasons],
     caveats: evaluation.blockingUnknowns.map((item) => item.label),
     agreedRent: evaluation.termsProposal?.rent ?? null,
+    provenance: [
+      { label: "发布角色", value: draft.role === "landlord" ? "房东本人" : "当前租客", source: "人工审核" },
+      { label: "粗粒度位置", value: publicLocation(draft), source: "发布方确认" }
+    ],
+    negotiation: { publicEvents: [] },
     listing: {
       title: String(draft.title || `${draft.location || ""}个人房源`),
+      shortTitle: String(draft.title || `${draft.location || ""}个人房源`),
       role: draft.role,
       district: draft.district || null,
       location: draft.location || null,
       station: draft.station || null,
+      walkMinutes: numberOrNull(draft.walkMinutes),
+      commuteMinutes: projectedCommuteMinutes,
       addressHint: `${publicLocation(draft)} · 精确地址待双方确认`,
       listedRent: numberOrNull(draft.listedRent),
       availableFrom: draft.availableFrom || null,
@@ -95,6 +107,7 @@ function supplyCandidateProjection(mandate, renterTask, evaluation) {
     score: evaluation.score,
     reasons: [...evaluation.publicReasons],
     caveats: evaluation.blockingUnknowns.map((item) => item.label),
+    agreedRent: evaluation.termsProposal?.rent ?? null,
     displayAlias: `租客 ${String(renterTask.id).slice(0, 6)}`,
     tenant: {
       alias: `租客 ${String(renterTask.id).slice(0, 6)}`,
@@ -149,7 +162,7 @@ export function evaluateTaskPair({
 
   const commuteDestinations = Array.isArray(mandate.commuteDestinations) ? mandate.commuteDestinations : [];
   if (commuteDestinations.length) {
-    const routeMinutes = commuteDestinations.map((destination) => numberOrNull(draft.commuteMinutesByDestination?.[destination]));
+    const routeMinutes = commuteDestinations.map((destination) => numberOrNull(draft.commuteMinutesByDestination?.[destination] ?? draft.commuteMinutes));
     if (routeMinutes.some((minutes) => minutes === null)) unknown("commute.routeMinutes", "supply", "COMMUTE_ROUTE_UNKNOWN", "通勤路线待计算");
     else if (Math.max(...routeMinutes) > Number(mandate.maxCommuteMinutes)) conflict("COMMUTE_EXCEEDS_LIMIT", "通勤时间超出要求", `route=${Math.max(...routeMinutes)}; limit=${mandate.maxCommuteMinutes}`);
     else publicReasons.push("通勤时间符合");
@@ -190,7 +203,8 @@ export function evaluateTaskPair({
   for (const key of ["kitchen", "washer", "ensuite", "elevator"]) {
     if (!mandate.hardConstraints?.[key]) continue;
     const supplied = draft.facilities?.[key];
-    if (supplied === null || supplied === undefined) unknown(`listing.facilities.${key}`, "supply", "REQUIRED_FACILITY_UNKNOWN", `${key} 信息待确认`);
+    const label = { kitchen: "厨房", washer: "洗衣机", ensuite: "独立卫生间", elevator: "电梯" }[key];
+    if (supplied === null || supplied === undefined) unknown(`listing.facilities.${key}`, "supply", "REQUIRED_FACILITY_UNKNOWN", `${label}信息待确认`);
     else if (supplied === false) conflict("REQUIRED_FACILITY_MISSING", "必须设施不符合", `facility=${key}`);
   }
 

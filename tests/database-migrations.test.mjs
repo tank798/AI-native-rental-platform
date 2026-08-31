@@ -87,8 +87,8 @@ function createLegacyFixture(filename) {
 }
 
 test("迁移列表版本连续且 SQL 文件全部入库", () => {
-  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3]);
-  assert.equal(latestSchemaVersion, 3);
+  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3, 4]);
+  assert.equal(latestSchemaVersion, 4);
   migrations.forEach((migration) => assert.equal(fs.statSync(migrationSqlPath(migration)).isFile(), true));
 });
 
