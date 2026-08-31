@@ -109,7 +109,11 @@ export function parseTaskCreateRequest(body) {
   }
   payload.inputVersion = inputVersion;
   payload.fieldStates = payload.fieldStates || {};
-  return { kind: body.kind, payload };
+  const clientRequestId = boundedText(body.clientRequestId, { field: "clientRequestId", maxLength: 120 });
+  if (clientRequestId && !/^[A-Za-z0-9:_-]{8,120}$/u.test(clientRequestId)) {
+    invalidField("clientRequestId", "clientRequestId 格式无效");
+  }
+  return { kind: body.kind, payload, clientRequestId };
 }
 
 /** Returns the allowlisted first renter record from a model JSON response. */

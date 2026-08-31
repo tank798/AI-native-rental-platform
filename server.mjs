@@ -14,6 +14,8 @@ import { createIntakeService } from "./src/server/intake-service.mjs";
 import { createMatchingService } from "./src/server/matching-service.mjs";
 import { createMediaRepository } from "./src/server/media-repository.mjs";
 import { createMediaService } from "./src/server/media-service.mjs";
+import { createMatchingWorker } from "./src/server/matching-worker.mjs";
+import { createOutboxRepository } from "./src/server/outbox-repository.mjs";
 import { createRateLimiter } from "./src/server/rate-limit.mjs";
 import { parseContactEncryptionKey } from "./src/server/contact-service.mjs";
 import { assertSameOrigin, httpError, readJson } from "./src/server/request-guards.mjs";
@@ -297,6 +299,14 @@ export function createRentalServer(options = {}) {
     onContactSecurityError: options.onContactSecurityError,
     mediaRepository
   });
+  const outbox = createOutboxRepository({ database: repository, clock, ...(options.outboxOptions || {}) });
+  const worker = createMatchingWorker({
+    outboxRepository: outbox,
+    matchingService: matching,
+    clock,
+    ...(options.workerOptions || {})
+  });
+  matching.clarifications.setRecalculate(() => worker.drain());
   const sessions = createSessionService({ repository, secureCookies, now: clock.now });
   const rateLimiter = options.rateLimiter || createRateLimiter({ now: clock.nowMs });
   const intake = createIntakeService({
@@ -306,6 +316,27 @@ export function createRentalServer(options = {}) {
     clientOptions: options.aiClientOptions || {}
   });
   let scheduler = null;
+  let maintenancePromise = null;
+
+  function runMaintenance() {
+    if (maintenancePromise) return maintenancePromise;
+    maintenancePromise = (async () => {
+      try {
+        outbox.requeueExpired();
+        repository.expireDueTasks();
+        outbox.compensateUnmatched({ olderThanMs: Math.max(60_000, schedulerMs * 6) });
+        worker.drain();
+        matching.contactGrants.cleanupExpired();
+        repository.cleanupExpiredSessions();
+        await media.cleanupPending();
+      } catch (error) {
+        console.error("持续匹配失败", error);
+      } finally {
+        maintenancePromise = null;
+      }
+    })();
+    return maintenancePromise;
+  }
 
   function sessionFor(request) {
     const session = sessions.authenticateCookie(request.headers.cookie);
@@ -439,17 +470,33 @@ export function createRentalServer(options = {}) {
       };
       label = draft.title || `${draft.location}个人房源`;
     }
-    repository.createTask({ id, ownerId: session.id, kind: body.kind, label, payload, expiresAt: isoTimestampAfterDays(clock, 30) });
-    matching.processAfterTaskCreated(id);
-    const snapshot = matching.snapshot(id);
-    return json(response, 201, { ...snapshot, task: publicTask(snapshot.task) });
+    const created = repository.createTaskIdempotent({
+      id,
+      ownerId: session.id,
+      kind: body.kind,
+      label,
+      payload,
+      expiresAt: isoTimestampAfterDays(clock, 30),
+      clientRequestId: body.clientRequestId
+    });
+    worker.drain();
+    const snapshot = matching.snapshot(created.task.id);
+    return json(response, created.created ? 201 : 200, {
+      ...snapshot,
+      task: publicTask(snapshot.task),
+      idempotent: !created.created
+    });
   }
 
   async function handleApi(request, response, url) {
     if (request.method === "GET" && url.pathname === "/api/health") {
-      return json(response, 200, {
-        ok: true,
+      const workerHealth = worker.health();
+      const ok = workerHealth.failed === 0;
+      return json(response, ok ? 200 : 503, {
+        ok,
         database: "sqlite",
+        databaseHealth: { status: "healthy", engine: "sqlite" },
+        worker: { status: ok ? "healthy" : "degraded", ...workerHealth },
         ai: intake.status(),
         continuousMatching: true,
         marketMode,
@@ -541,7 +588,10 @@ export function createRentalServer(options = {}) {
         alt: body.alt,
         publicConsent: body.publicConsent
       });
-      matching.processTask(taskId);
+      if (!result.duplicate) {
+        repository.bumpTaskInputVersion(taskId, session.id, "task.media_changed");
+        worker.drain();
+      }
       return json(response, result.duplicate ? 200 : 201, result);
     }
 
@@ -623,14 +673,14 @@ export function createRentalServer(options = {}) {
         const body = await readJson(request);
         if (!["active", "paused", "closed"].includes(body.status)) throw Object.assign(new Error("任务状态无效"), { status: 422 });
         const updated = repository.setTaskStatus(task.id, session.id, body.status);
-        matching.processTask(task.id);
+        worker.drain();
         return json(response, 200, { task: publicTask(updated) });
       }
       if (request.method === "DELETE") {
         assertSameOrigin(request);
         enforceWriteLimit(request, session);
         repository.setTaskStatus(task.id, session.id, "closed");
-        matching.processTask(task.id);
+        worker.drain();
         const queuedMedia = media.deleteForTask(task.id, session.id);
         repository.deleteTask(task.id, session.id);
         return json(response, 200, { deleted: true, queuedMedia });
@@ -677,6 +727,8 @@ export function createRentalServer(options = {}) {
     verification,
     media,
     mediaRepository,
+    outbox,
+    worker,
     clock,
     intake,
     sessions,
@@ -686,14 +738,9 @@ export function createRentalServer(options = {}) {
         server.once("error", reject);
         server.listen(port, host, resolve);
       });
+      worker.drain();
       if (enableScheduler) {
-        scheduler = setInterval(() => {
-          try {
-            matching.processAllActive();
-          } catch (error) {
-            console.error("持续匹配失败", error);
-          }
-        }, schedulerMs);
+        scheduler = setInterval(() => void runMaintenance(), schedulerMs);
         scheduler.unref();
       }
       return server.address();
@@ -701,6 +748,7 @@ export function createRentalServer(options = {}) {
     async close() {
       if (scheduler) clearInterval(scheduler);
       if (server.listening) await new Promise((resolve) => server.close(resolve));
+      if (maintenancePromise) await maintenancePromise;
       repository.close();
     }
   };

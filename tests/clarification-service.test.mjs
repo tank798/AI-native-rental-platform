@@ -111,7 +111,8 @@ test("非目标方 404；回答经 schema 后原子写字段版本、outbox 和�
   assert.equal(answered.field.version, 1);
   assert.equal(answered.task.inputVersion, 2);
   assert.equal(matching.matchCaseRepository.get(matchCase.id).status, "terms_ready");
-  assert.equal(database.raw.prepare("SELECT COUNT(*) AS count FROM outbox_events WHERE aggregate_id = 'supply'").get().count, 1);
+  assert.equal(database.raw.prepare("SELECT COUNT(*) AS count FROM outbox_events WHERE aggregate_id = 'supply'").get().count, 2);
+  assert.equal(database.raw.prepare("SELECT COUNT(*) AS count FROM outbox_events WHERE dedupe_key = 'task:supply:input:2'").get().count, 1);
   assert.equal(matching.matchCaseRepository.listEvents(matchCase.id).filter((event) => event.type === "clarification_answered").length, 1);
 
   const replay = await matching.clarifications.answer({

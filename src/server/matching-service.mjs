@@ -11,6 +11,7 @@ import { createContactGrantService } from "./contact-grant-service.mjs";
 import { createContactService } from "./contact-service.mjs";
 import { createMatchCaseRepository } from "./match-case-repository.mjs";
 import { createMatchCaseService } from "./match-case-service.mjs";
+import { PAIR_EVALUATOR_VERSION } from "./pair-evaluator.mjs";
 import { createTaskRepository } from "./task-repository.mjs";
 import { normalizeMarketMode } from "./runtime-config.mjs";
 
@@ -214,6 +215,61 @@ export function createMatchingService(repository, {
     return tasks.length;
   }
 
+  function processOutboxEvent(event, jobRepository) {
+    const taskId = event?.payload?.taskId || event?.aggregateId;
+    const task = taskRepository.get(taskId);
+    if (!task) return { missingTask: true, evaluatedPairs: 0, skippedPairs: 0, staleResultDiscards: 0 };
+    if (event?.payload?.inputVersion && Number(event.payload.inputVersion) !== task.inputVersion) {
+      return { staleEvent: true, evaluatedPairs: 0, skippedPairs: 0, staleResultDiscards: 1 };
+    }
+    if (normalizedMarketMode === "demo") {
+      processTask(task.id);
+      if (task.status === "active") {
+        const oppositeKind = task.kind === "renter" ? "supply" : "renter";
+        repository.listActiveTasks(oppositeKind)
+          .filter((opposite) => opposite.ownerId !== task.ownerId)
+          .forEach((opposite) => processTask(opposite.id));
+      }
+      return { evaluatedPairs: 0, skippedPairs: 0, staleResultDiscards: 0, demo: true };
+    }
+    if (task.status !== "active") {
+      const invalidated = matchCases.processTask(task.id, { opposites: [] });
+      return { ...invalidated, staleResultDiscards: 0 };
+    }
+
+    const opposites = taskRepository.listAffectedOpposites(task);
+    const result = matchCases.processTask(task.id, {
+      opposites,
+      beforePair({ task: currentTask, opposite }) {
+        const renterTask = currentTask.kind === "renter" ? currentTask : opposite;
+        const supplyTask = currentTask.kind === "supply" ? currentTask : opposite;
+        const jobKey = [
+          "pair",
+          renterTask.id,
+          renterTask.inputVersion,
+          supplyTask.id,
+          supplyTask.inputVersion,
+          PAIR_EVALUATOR_VERSION
+        ].join(":");
+        const job = jobRepository.beginMatchJob({
+          jobKey,
+          eventId: event.id,
+          renterTaskId: renterTask.id,
+          renterInputVersion: renterTask.inputVersion,
+          supplyTaskId: supplyTask.id,
+          supplyInputVersion: supplyTask.inputVersion,
+          evaluatorVersion: PAIR_EVALUATOR_VERSION
+        });
+        return { ...job, jobKey, skip: !job.shouldProcess };
+      },
+      afterPair({ job, processed, durationMs }) {
+        if (processed.stale) jobRepository.markMatchJobStale(job.jobKey, "task_version_changed", durationMs);
+        else jobRepository.completeMatchJob(job.jobKey, durationMs);
+      }
+    });
+    return { ...result, staleResultDiscards: result.stalePairs || 0 };
+  }
+
   function snapshot(taskId) {
     const task = repository.getTask(taskId);
     if (!task) return null;
@@ -236,6 +292,7 @@ export function createMatchingService(repository, {
     processTask,
     processAfterTaskCreated,
     processAllActive,
+    processOutboxEvent,
     expireDueTasks: repository.expireDueTasks,
     snapshot
   };

@@ -66,6 +66,9 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   assert.equal(resumedSession.response.headers.get("set-cookie"), null);
   const health = await request(baseUrl, "/api/health");
   assert.equal(health.payload.database, "sqlite");
+  assert.equal(health.payload.databaseHealth.status, "healthy");
+  assert.equal(health.payload.worker.status, "healthy");
+  assert.equal(health.payload.worker.failed, 0);
   assert.equal(health.payload.continuousMatching, true);
   assert.equal(health.payload.marketMode, "real");
   assert.equal(health.payload.demoBanner, false);
@@ -79,18 +82,20 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   mandate.sharedHousing = false;
   mandate.roommateGender = null;
   mandate.hardConstraints.kitchen = false;
+  const renterRequest = {
+    clientRequestId: "renter-request-0001",
+    kind: "renter",
+    payload: {
+      mandate,
+      rawText: "临港新城找房",
+      inputVersion: 7,
+      fieldStates: { commute: { value: 25, source: "user", confirmationStatus: "user_confirmed", version: 2 } }
+    }
+  };
   const renterCreated = await request(baseUrl, "/api/tasks", {
     cookie: renterSession.cookie,
     method: "POST",
-    body: {
-      kind: "renter",
-      payload: {
-        mandate,
-        rawText: "临港新城找房",
-        inputVersion: 7,
-        fieldStates: { commute: { value: 25, source: "user", confirmationStatus: "user_confirmed", version: 2 } }
-      }
-    }
+    body: renterRequest
   });
   assert.equal(renterCreated.response.status, 201);
   assert.equal(renterCreated.payload.candidates.length, 0);
@@ -102,6 +107,15 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   assert.equal(persistedMandate.hardConstraints.kitchen, false);
   assert.equal(app.repository.getTask(renterCreated.payload.task.id).payload.inputVersion, 7);
   assert.equal(app.repository.getTask(renterCreated.payload.task.id).payload.fieldStates.commute.value, 25);
+  const renterReplay = await request(baseUrl, "/api/tasks", {
+    cookie: renterSession.cookie,
+    method: "POST",
+    body: renterRequest
+  });
+  assert.equal(renterReplay.response.status, 200);
+  assert.equal(renterReplay.payload.idempotent, true);
+  assert.equal(renterReplay.payload.task.id, renterCreated.payload.task.id);
+  assert.equal(app.repository.raw.prepare("SELECT COUNT(*) AS count FROM outbox_events WHERE aggregate_id = ?").get(renterCreated.payload.task.id).count, 1);
 
   const evidenceRefs = {};
   for (const kind of ["identity", "roleDocument", "rightsDocument", "livePhotoChallenge"]) {

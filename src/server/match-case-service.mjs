@@ -1,3 +1,5 @@
+import { performance } from "node:perf_hooks";
+
 import { createClock } from "../clock.mjs";
 import { evaluateTaskPair } from "./pair-evaluator.mjs";
 
@@ -44,20 +46,28 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, me
     if (!left || !right || left.__fixture || right.__fixture || left.counterpartyType === "fixture" || right.counterpartyType === "fixture") {
       return { matchCase: null, evaluation: null, changes: new Map() };
     }
-    const { renterTask, supplyTask } = pairTasks(left, right);
-    if (renterTask.kind !== "renter" || supplyTask.kind !== "supply" || renterTask.ownerId === supplyTask.ownerId) {
+    const expected = pairTasks(left, right);
+    if (expected.renterTask.kind !== "renter" || expected.supplyTask.kind !== "supply" || expected.renterTask.ownerId === expected.supplyTask.ownerId) {
       return { matchCase: null, evaluation: null, changes: new Map() };
     }
-    const evaluation = evaluateTaskPair({
-      renterTask,
-      renterInputVersion: renterTask.inputVersion,
-      supplyTask,
-      supplyInputVersion: supplyTask.inputVersion,
-      evaluatedAt
-    });
-    const changes = new Map([[renterTask.id, false], [supplyTask.id, false]]);
 
     return taskRepository.transaction(() => {
+      const renterTask = taskRepository.get(expected.renterTask.id);
+      const supplyTask = taskRepository.get(expected.supplyTask.id);
+      const changes = new Map([[expected.renterTask.id, false], [expected.supplyTask.id, false]]);
+      if (!renterTask || !supplyTask
+        || renterTask.status !== "active" || supplyTask.status !== "active"
+        || renterTask.inputVersion !== expected.renterTask.inputVersion
+        || supplyTask.inputVersion !== expected.supplyTask.inputVersion) {
+        return { matchCase: null, evaluation: null, changes, stale: true };
+      }
+      const evaluation = evaluateTaskPair({
+        renterTask,
+        renterInputVersion: renterTask.inputVersion,
+        supplyTask,
+        supplyInputVersion: supplyTask.inputVersion,
+        evaluatedAt
+      });
       const current = matchCaseRepository.findByPair(renterTask.id, supplyTask.id);
       if (evaluation.status === "hard_conflict") {
         if (current) matchCaseRepository.invalidate(current.id, "hard_conflict", "invalidated", evaluatedAt);
@@ -65,7 +75,7 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, me
         changes.set(supplyTask.id, taskRepository.removeCandidate(supplyTask.id, renterTask.id));
         const invalidated = current ? matchCaseRepository.get(current.id) : null;
         if (invalidated) onCaseEvaluated?.({ matchCase: invalidated, evaluation, renterTask, supplyTask });
-        return { matchCase: invalidated, evaluation, changes };
+        return { matchCase: invalidated, evaluation, changes, stale: false };
       }
 
       const matchCase = matchCaseRepository.upsertEvaluation({
@@ -83,7 +93,7 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, me
         taskRepository.upsertCandidate(supplyTask.id, renterTask.id, projectionForSupply(evaluation, matchCase, renterTask), evaluatedAt)
       );
       onCaseEvaluated?.({ matchCase, evaluation, renterTask, supplyTask });
-      return { matchCase, evaluation, changes };
+      return { matchCase, evaluation, changes, stale: false };
     });
   }
 
@@ -110,7 +120,7 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, me
     }
   }
 
-  function processTask(taskId) {
+  function processTask(taskId, { opposites: suppliedOpposites = null, beforePair = null, afterPair = null } = {}) {
     const task = taskRepository.get(taskId);
     if (!task) return null;
     const at = clock.nowIso();
@@ -118,16 +128,29 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, me
       removeInactiveCases(task, at);
       return { task: taskRepository.get(task.id), evaluatedPairs: 0 };
     }
-    const opposites = taskRepository.listOpposite(task);
+    const opposites = suppliedOpposites || taskRepository.listOpposite(task);
     const changedByTask = new Map([[task.id, false]]);
     const scannedByTask = new Map([[task.id, opposites.length]]);
     const activeOppositeIds = new Set(opposites.map((item) => item.id));
+    let evaluatedPairs = 0;
+    let skippedPairs = 0;
+    let stalePairs = 0;
 
     taskRepository.transaction(() => {
       for (const opposite of opposites) {
+        const job = beforePair?.({ task, opposite }) || null;
+        if (job?.skip) {
+          skippedPairs += 1;
+          continue;
+        }
+        const startedAt = performance.now();
         const processed = processPair(task, opposite, at);
+        const durationMs = performance.now() - startedAt;
+        if (processed.stale) stalePairs += 1;
+        else evaluatedPairs += 1;
+        afterPair?.({ task, opposite, job, processed, durationMs });
         for (const [id, changed] of processed.changes) changedByTask.set(id, Boolean(changedByTask.get(id)) || changed);
-        scannedByTask.set(opposite.id, taskRepository.listOpposite(opposite).length);
+        scannedByTask.set(opposite.id, 1);
       }
       for (const existingCase of matchCaseRepository.listForTask(task.id)) {
         const otherId = counterpartId(existingCase, task.id);
@@ -138,7 +161,7 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, me
       }
       recordRuns(new Set([task.id, ...opposites.map((item) => item.id)]), scannedByTask, changedByTask, at);
     });
-    return { task: taskRepository.get(task.id), evaluatedPairs: opposites.length };
+    return { task: taskRepository.get(task.id), evaluatedPairs, skippedPairs, stalePairs };
   }
 
   function processAllActive() {

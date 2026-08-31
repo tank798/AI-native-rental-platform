@@ -77,10 +77,10 @@ export function parseSupplyWithServer(text, referenceDate) {
   });
 }
 
-export function createServerTask(kind, payload) {
+export function createServerTask(kind, payload, clientRequestId = crypto.randomUUID()) {
   return apiRequest("/api/tasks", {
     method: "POST",
-    body: JSON.stringify({ kind, payload })
+    body: JSON.stringify({ kind, payload, clientRequestId })
   });
 }
 

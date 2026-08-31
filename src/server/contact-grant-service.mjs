@@ -54,6 +54,7 @@ export function createContactGrantService({
       UPDATE contact_grants SET revoked_at = ?, revoke_reason = ?
       WHERE match_case_id = ? AND revoked_at IS NULL
     `),
+    expired: db.prepare("SELECT match_case_id FROM contact_grants WHERE revoked_at IS NULL AND expires_at <= ?"),
     history: db.prepare("SELECT * FROM contact_grants WHERE match_case_id = ? ORDER BY granted_at ASC"),
     insertEvent: db.prepare("INSERT INTO match_events(match_case_id, actor_owner_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?)")
   };
@@ -206,6 +207,12 @@ export function createContactGrantService({
     isUnlocked,
     getForOwner,
     revokeForCase,
+    cleanupExpired(at = clock.nowIso()) {
+      const rows = statements.expired.all(at);
+      let revoked = 0;
+      for (const row of rows) revoked += revokeForCase(row.match_case_id, "grant_expired", at) ? 1 : 0;
+      return revoked;
+    },
     assertOwnerHasContact(ownerId) {
       if (!contactService.has(ownerId)) throw serviceError(422, "CONTACT_REQUIRED", "请先设置可用联系方式");
       return true;

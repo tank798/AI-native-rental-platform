@@ -72,7 +72,7 @@ test("公开媒体 API 只返回净化 derivative，候选可读、第三方与�
     payload: { draft, rawText: "静安寺个人房源", inputVersion: 1, fieldStates: {} },
     expiresAt: "2026-10-01T00:00:00.000Z"
   });
-  app.matching.processAfterTaskCreated("media-supply-task");
+  app.worker.drain();
   assert.equal(app.matching.snapshot("media-renter-task").candidates.length, 1);
 
   const malicious = await jsonRequest(baseUrl, "/api/tasks/media-supply-task/media", {
@@ -119,6 +119,7 @@ test("公开媒体 API 只返回净化 derivative，候选可读、第三方与�
   });
   assert.equal(uploaded.response.status, 201);
   assert.equal(uploaded.payload.duplicate, false);
+  assert.equal(app.repository.getTask("media-supply-task").inputVersion, 2);
   assert.deepEqual(Object.keys(uploaded.payload.media).sort(), ["alt", "height", "id", "src", "width"]);
   assert.doesNotMatch(JSON.stringify(uploaded.payload), /original|derivative|private-originals|public-derivatives/iu);
 
@@ -129,6 +130,7 @@ test("公开媒体 API 只返回净化 derivative，候选可读、第三方与�
   });
   assert.equal(duplicate.response.status, 200);
   assert.equal(duplicate.payload.media.id, uploaded.payload.media.id);
+  assert.equal(app.repository.getTask("media-supply-task").inputVersion, 2);
 
   const renterSnapshot = await jsonRequest(baseUrl, "/api/tasks/media-renter-task", { cookie: renter.cookie });
   assert.equal(renterSnapshot.response.status, 200);

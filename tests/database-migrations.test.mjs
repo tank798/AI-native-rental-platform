@@ -87,8 +87,8 @@ function createLegacyFixture(filename) {
 }
 
 test("迁移列表版本连续且 SQL 文件全部入库", () => {
-  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3, 4, 5, 6, 7]);
-  assert.equal(latestSchemaVersion, 7);
+  assert.deepEqual(migrations.map((item) => item.version), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.equal(latestSchemaVersion, 8);
   migrations.forEach((migration) => assert.equal(fs.statSync(migrationSqlPath(migration)).isFile(), true));
 });
 
@@ -213,7 +213,7 @@ test("双边案例、open 澄清、确认和 outbox 去重均由数据库约束"
 
   const insertOutbox = repository.raw.prepare(`
     INSERT INTO outbox_events(id, aggregate_type, aggregate_id, event_type, payload_json, dedupe_key, status, available_at, created_at)
-    VALUES (?, 'task', 'renter', 'task.match_requested', '{}', 'task:renter:input:1', 'pending', ?, ?)
+    VALUES (?, 'task', 'renter', 'task.match_requested', '{}', 'constraint:renter:input:1', 'pending', ?, ?)
   `);
   insertOutbox.run("outbox-1", at, at);
   assert.throws(() => insertOutbox.run("outbox-2", at, at), /UNIQUE/);

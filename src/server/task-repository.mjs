@@ -57,18 +57,56 @@ function fieldFromRow(row) {
   };
 }
 
+function normalizePlace(value) {
+  return String(value || "")
+    .replace(/(?:上海市|上海|市|区|县|地铁站|站|商圈|附近|周边|一带)/gu, "")
+    .replace(/[\s·・]/gu, "")
+    .trim();
+}
+
+function placeMayIntersect(mandate, draft) {
+  const requested = Array.isArray(mandate?.locations) ? mandate.locations.map(normalizePlace).filter(Boolean) : [];
+  const supplied = [draft?.location, draft?.station, draft?.district].map(normalizePlace).filter(Boolean);
+  if (!requested.length || !supplied.length) return true;
+  if (requested.some((left) => supplied.some((right) => left.includes(right) || right.includes(left)))) return true;
+  const destinations = Array.isArray(mandate?.commuteDestinations) ? mandate.commuteDestinations : [];
+  return destinations.length > 0 && destinations.every((destination) => {
+    const minutes = draft?.commuteMinutesByDestination?.[destination] ?? draft?.commuteMinutes;
+    return Number.isFinite(Number(minutes));
+  });
+}
+
+function coarsePairPossible(task, opposite) {
+  const renter = task.kind === "renter" ? task : opposite;
+  const supply = task.kind === "supply" ? task : opposite;
+  const mandate = renter.payload?.mandate || {};
+  const draft = supply.payload?.draft || {};
+  if (mandate.city && draft.city && mandate.city !== draft.city) return false;
+  const hardMax = mandate.budget?.hardMax;
+  const minimumRent = draft.minimumAuthorizedRent;
+  if (hardMax !== null && hardMax !== undefined && hardMax !== ""
+    && minimumRent !== null && minimumRent !== undefined && minimumRent !== ""
+    && Number.isFinite(Number(hardMax)) && Number.isFinite(Number(minimumRent))
+    && Number(hardMax) < Number(minimumRent)) return false;
+  return placeMayIntersect(mandate, draft);
+}
+
 /** Prepared-statement boundary for versioned tasks and pair projections. */
 export function createTaskRepository({ database, clock = createClock() }) {
   if (!database?.raw || !database?.transaction) throw new Error("task repository requires an open rental database");
   const db = database.raw;
   const statements = {
     byId: db.prepare("SELECT * FROM tasks WHERE id = ?"),
-    activeByKind: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' ORDER BY created_at ASC"),
-    opposite: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND owner_id <> ? ORDER BY created_at ASC"),
+    activeByKind: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? ORDER BY created_at ASC"),
+    opposite: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? AND owner_id <> ? ORDER BY created_at ASC"),
     inactiveWithCases: db.prepare(`
       SELECT DISTINCT tasks.* FROM tasks
       JOIN match_cases ON match_cases.renter_task_id = tasks.id OR match_cases.supply_task_id = tasks.id
-      WHERE tasks.status <> 'active'
+      WHERE tasks.status <> 'active' OR tasks.expires_at <= ?
+    `),
+    caseCounterpartIds: db.prepare(`
+      SELECT CASE WHEN renter_task_id = ? THEN supply_task_id ELSE renter_task_id END AS counterparty_id
+      FROM match_cases WHERE renter_task_id = ? OR supply_task_id = ?
     `),
     candidates: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? ORDER BY created_at ASC"),
     candidateByPair: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? AND counterparty_id = ?"),
@@ -173,12 +211,20 @@ export function createTaskRepository({ database, clock = createClock() }) {
 
   return {
     get: (id) => taskFromRow(statements.byId.get(id)),
-    listActive: (kind) => statements.activeByKind.all(kind).map(taskFromRow),
+    listActive: (kind) => statements.activeByKind.all(kind, clock.nowIso()).map(taskFromRow),
     listOpposite(task) {
       const oppositeKind = task.kind === "renter" ? "supply" : "renter";
-      return statements.opposite.all(oppositeKind, task.ownerId).map(taskFromRow);
+      return statements.opposite.all(oppositeKind, clock.nowIso(), task.ownerId).map(taskFromRow);
     },
-    listInactiveWithCases: () => statements.inactiveWithCases.all().map(taskFromRow),
+    listAffectedOpposites(task) {
+      const oppositeKind = task.kind === "renter" ? "supply" : "renter";
+      const linked = new Set(statements.caseCounterpartIds.all(task.id, task.id, task.id).map((row) => row.counterparty_id));
+      return statements.opposite
+        .all(oppositeKind, clock.nowIso(), task.ownerId)
+        .map(taskFromRow)
+        .filter((opposite) => linked.has(opposite.id) || coarsePairPossible(task, opposite));
+    },
+    listInactiveWithCases: () => statements.inactiveWithCases.all(clock.nowIso()).map(taskFromRow),
     listCandidates: (taskId) => statements.candidates.all(taskId).map(candidateFromRow),
     getField: (taskId, fieldKey) => fieldFromRow(statements.fieldByKey.get(taskId, fieldKey)),
     applyFieldAnswer,

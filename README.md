@@ -46,8 +46,10 @@ flowchart LR
     B --> E[确定性策略闸门]
     D --> E
     E --> F[服务端持久任务]
-    F --> G[新任务触发 + 每 10 秒持续扫描]
-    G --> H[双边硬筛与授权范围内议价]
+    F --> G[同事务写入匹配事件]
+    G --> L[幂等 Worker 增量处理]
+    M[定时补偿器] --> L
+    L --> H[双边硬筛与授权范围内议价]
     H --> I[最多三套房源或租客结果]
     I --> J[解释匹配依据与风险]
     J --> K[双方确认后交换联系方式]
@@ -114,7 +116,8 @@ flowchart LR
 - 找房任务扫描房源，出租任务反向扫描租客。
 - 新供给到达后立即更新相关租客任务。
 - 新租客到达后立即更新相关出租任务。
-- 服务端默认每 10 秒扫描全部活跃任务，前端每 3 秒拉取任务快照。
+- 任务与 `task.match_requested` 在同一事务提交；单进程 worker 只评估城市、位置和价格粗筛后的受影响任务对。
+- 定时器只回收超时租约、处理到期任务、补发异常遗漏事件并清理过期数据，不再每 10 秒重跑全市场；前端每 3 秒拉取任务快照。
 - 任务支持 `active`、`paused`、`closed` 和自动过期语义。
 - 候选使用版本号和审计事件记录更新，不依赖纯前端动画制造进度。
 
@@ -164,7 +167,8 @@ flowchart TB
         Intake[AI Intake Service]
         Policy[确定性策略闸门]
         Match[双边匹配服务]
-        Scheduler[10 秒持续扫描器]
+        Worker[事务 Outbox Worker]
+        Scheduler[定时补偿器]
         Upload[私有材料上传]
         Media[公开图片解码与净化]
     end
@@ -186,10 +190,11 @@ flowchart TB
     Intake --> Policy
     API --> Upload
     API --> Media
-    API --> Match
-    Scheduler --> Match
-    Match --> Policy
     API --> SQLite
+    SQLite --> Worker
+    Worker --> Match
+    Scheduler --> Worker
+    Match --> Policy
     Match --> SQLite
     Upload --> Files
 ```
@@ -204,6 +209,8 @@ flowchart TB
 | HTTP 服务 | `server.mjs` | 静态资源、REST API、会话授权、上传和调度器 |
 | Intake 服务 | `src/server/intake-service.mjs` | 规则解析、模型调用、保守合并和回退 |
 | 匹配服务 | `src/server/matching-service.mjs` | 双边任务扫描、候选增量更新、公开结果脱敏 |
+| Outbox 仓储 | `src/server/outbox-repository.mjs` | 事件去重、短租约领取、退避重试、失败告警和 worker 健康数据 |
+| 匹配 Worker | `src/server/matching-worker.mjs` | 增量消费事件、配对作业幂等和旧版本结果丢弃 |
 | 媒体服务 | `src/server/media-service.mjs` | 图片解码、像素与动画限制、元数据清除和受控读取 |
 | 媒体仓储 | `src/server/media-repository.mjs` | 公开授权、内容哈希、候选可见性和清理队列 |
 | SQLite 仓储 | `src/server/database.mjs` | 会话、材料、任务、候选和审计事件持久化 |
@@ -238,7 +245,7 @@ flowchart TB
 
 ## 持续双边匹配
 
-任务创建后会立即执行一次匹配，并保存：
+任务创建与匹配请求事件会在同一 SQLite 事务中提交；请求内会立即驱动 worker 消费一次，并保存：
 
 - 已扫描数量 `scanned`；
 - 合适数量 `suitable`；
@@ -248,10 +255,10 @@ flowchart TB
 
 之后有两类触发器：
 
-1. **事件触发**：新找房任务或新房源任务创建时，立即重新处理对侧活跃任务。
-2. **时间触发**：服务端调度器默认每 10 秒重新扫描活跃任务，并先停止已过期任务。
+1. **事件触发**：创建、字段新版本、暂停、恢复、关闭、到期和公开媒体变化写入 outbox，worker 只计算受影响集合。
+2. **时间补偿**：调度器回收超过锁租期的 `processing` 事件、停止到期任务、为长期未匹配且无 pending event 的异常任务补事件，并清理过期授权、会话和媒体 tombstone。
 
-候选使用 `receiver_task_id + counterparty_id` 去重。匹配结果变化时更新候选版本，前端轮询后重新渲染；没有变化时不会制造新的候选记录。
+每个任务事件使用 dedupe key 去重，每个任务对使用双方任务 ID、双方输入版本和 evaluator 版本组成固定 job key。候选继续使用 `receiver_task_id + counterparty_id` 去重；处理期间版本变化的旧结果会被丢弃，新版本事件负责重算。SQLite 阶段通过 `BEGIN IMMEDIATE` 和短租约保证单机多 worker 实例不会同时领取同一事件，不宣称已经具备多机高吞吐能力。
 
 ## 隐私、安全与材料核验
 
@@ -369,12 +376,12 @@ npm start
 
 | 方法 | 路径 | 说明 |
 |:---:|:---:|:---:|
-| `GET` | `/api/health` | 返回 SQLite、AI 配置和持续匹配状态 |
+| `GET` | `/api/health` | 分别返回 SQLite、worker 最近成功时间、pending/failed 数、作业 P50/P95 和 AI 状态 |
 | `POST` | `/api/session` | 创建独立浏览器会话 |
 | `POST` | `/api/intake/renter` | 结构化租客自然语言需求 |
 | `POST` | `/api/intake/supply` | 结构化出租自然语言房源 |
 | `POST` | `/api/evidence` | 上传 JPG、PNG、WebP 或 PDF 材料，单个最多 8MB |
-| `POST` | `/api/tasks` | 创建找房或出租任务，并执行首轮匹配 |
+| `POST` | `/api/tasks` | 使用 `clientRequestId` 幂等创建任务，并由 outbox worker 执行首轮匹配 |
 | `GET` | `/api/tasks` | 获取当前会话的任务列表，最新任务优先 |
 | `GET` | `/api/tasks/:id` | 获取任务、候选和审计事件快照 |
 | `PATCH` | `/api/tasks/:id` | 把任务设为 `active`、`paused` 或 `closed` |
@@ -419,6 +426,9 @@ SQLite 当前包含以下核心表：
 | `contact_grants` | 案例、条款与输入快照、有效期、撤销原因 | 联系方式读取能力 |
 | `listing_media` | 私密原图路径、公开 derivative、双哈希、尺寸、授权和删除状态 | 公开房源图片管线 |
 | `media_cleanup_queue` | 媒体、任务、待清理路径、尝试次数和完成时间 | 删除后的文件清理补偿 |
+| `outbox_events` | 聚合 ID、事件、dedupe key、租约、尝试次数和可用时间 | 可靠驱动持续匹配 |
+| `match_jobs` | 双方任务与输入版本、evaluator 版本、状态和耗时 | 配对作业幂等与性能记录 |
+| `worker_health` | 最近成功/失败、错误码和批次指标 | 健康检查与故障定位 |
 | `match_events` | 案例、事件类型、脱敏 payload | 澄清、确认与授权审计 |
 
 当前使用 SQLite 是为了让完整链路可以零依赖复现。生产环境建议迁移到 PostgreSQL，并使用数据库行级安全策略、KMS、私有对象存储和不可变事件日志。
@@ -432,7 +442,7 @@ npm test
 npm run check
 ```
 
-当前测试共 141 项，覆盖：
+当前测试共 147 项，覆盖：
 
 - 租客与出租自然语言解析；
 - Qwen 结果不能覆盖规则明确事实；
@@ -440,14 +450,16 @@ npm run check
 - 个人转租零收费表达与中介伪装边界；
 - 发布材料不可跨会话复用；
 - 双边任务持久化和增量候选更新；
+- 任务与 outbox 原子提交、请求重放、竞争领取、退避重试、崩溃租约回收和终态告警；
+- 200×50 市场单任务变化只评估受影响集合，旧版本结果不会覆盖新任务；
 - 任务过期与续期；
 - 风控、硬筛、议价和候选选择；
 - 私密预算和底价不得进入公开结果。
 
-在禁止监听本机端口的沙箱中，两项 HTTP 测试会自动跳过；在正常本机环境中可直接运行：
+在禁止监听本机端口的沙箱中，端口相关 HTTP 测试会自动跳过；在正常本机环境中可直接运行完整服务端回归：
 
 ```bash
-node --test tests/server-api.test.mjs
+node --test tests/server-api.test.mjs tests/server-clarification-api.test.mjs tests/server-match-case-api.test.mjs tests/server-media-api.test.mjs tests/server-rate-limit.test.mjs tests/server-security.test.mjs
 ```
 
 ### 100 × 100 测试市场

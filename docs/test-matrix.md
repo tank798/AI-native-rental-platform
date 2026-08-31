@@ -145,3 +145,17 @@
 105. 删除任务后公开媒体立即不可访问，并写入独立清理队列等待物理文件回收。
 106. 候选卡、详情和分享预览使用真实 `<picture>/<img>`；无公开图时显示中性占位，不显示演示样板房。
 107. service worker 只缓存 allowlist 且 `response.ok` 的静态资源，从不缓存任意 `/api/` 响应。
+
+## N. Transactional Outbox 持续匹配
+
+108. 创建任务与 `task.match_requested` 必须在同一事务；outbox insert 失败时任务和审计事件一并回滚。
+109. 相同 owner 与 `clientRequestId` 重放返回原任务，且同一 `taskId + inputVersion` 只有一个标准匹配事件。
+110. 字段版本、暂停、恢复、关闭和到期变化会提升任务输入版本，并原子写入重算或失效事件。
+111. 两个 worker 竞争时，同一事件只能被一个 worker ID 持有；非持有者不能完成或改写该事件。
+112. 可恢复失败增加 attempts 并按 fake clock 指数退避；超时 `processing` 租约可回收，达到上限进入 `failed` 并写告警事件。
+113. pair job key 固定绑定双方任务 ID、双方输入版本和 evaluator 版本；同一版本重复事件不重复评估或创建案例。
+114. worker 写候选前重新读取双方版本；旧事件与处理中变化的旧结果都只能记为 stale，不能覆盖新版本。
+115. 粗筛只排除确定不可能的城市、位置和价格组合；未知项保留给最终 pair evaluator 判断。
+116. 200 租客 × 50 房源中修改一个租客只评估 10 个受影响房源，不重新运行 10,000 个任务对。
+117. 调度器只补发长期未匹配且没有 pending/processing event 的异常任务，并按时间桶去重补偿事件。
+118. 健康检查分别报告 SQLite、AI、worker 最近成功/失败、队列状态和作业 P50/P95；终态失败时不能返回 healthy。

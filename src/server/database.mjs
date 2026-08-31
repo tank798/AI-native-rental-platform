@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { performance } from "node:perf_hooks";
 import { createClock } from "../clock.mjs";
 import { latestSchemaVersion, runMigrations } from "./migrations.mjs";
 
@@ -110,6 +111,7 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
     `),
     touchSession: db.prepare("UPDATE sessions SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL"),
     revokeSession: db.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL"),
+    deleteExpiredSessions: db.prepare("DELETE FROM sessions WHERE expires_at <= ?"),
     insertEvidence: db.prepare(`
       INSERT INTO evidence_uploads(id, owner_id, kind, storage_path, original_name, mime_type, sha256, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -133,18 +135,25 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
     `),
     taskById: db.prepare("SELECT * FROM tasks WHERE id = ?"),
+    taskByClientRequest: db.prepare("SELECT * FROM tasks WHERE owner_id = ? AND client_request_id = ?"),
     tasksByOwner: db.prepare("SELECT * FROM tasks WHERE owner_id = ? ORDER BY created_at DESC"),
-    activeTasksByKind: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' ORDER BY created_at ASC"),
-    activeOppositeTasks: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND owner_id <> ? ORDER BY created_at ASC"),
-    expiringTasks: db.prepare("SELECT id FROM tasks WHERE status = 'active' AND expires_at <= ?"),
-    markTaskExpired: db.prepare("UPDATE tasks SET status = 'expired', updated_at = ? WHERE id = ? AND status = 'active'"),
+    activeTasksByKind: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? ORDER BY created_at ASC"),
+    activeOppositeTasks: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? AND owner_id <> ? ORDER BY created_at ASC"),
+    expiringTasks: db.prepare("SELECT * FROM tasks WHERE status = 'active' AND expires_at <= ?"),
+    markTaskExpired: db.prepare(`
+      UPDATE tasks SET status = 'expired', payload_json = ?, input_version = ?, updated_at = ?
+      WHERE id = ? AND status = 'active' AND input_version = ?
+    `),
     updateTaskRun: db.prepare(`
       UPDATE tasks
       SET scanned = ?, suitable = ?, run_count = run_count + 1,
           candidate_version = candidate_version + ?, updated_at = ?, last_match_at = ?, last_matched_at = ?
       WHERE id = ?
     `),
-    updateTaskStatus: db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND owner_id = ?"),
+    updateTaskStatus: db.prepare(`
+      UPDATE tasks SET status = ?, payload_json = ?, input_version = ?, updated_at = ?
+      WHERE id = ? AND owner_id = ? AND input_version = ?
+    `),
     deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND owner_id = ?"),
     candidatesByTask: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? ORDER BY created_at ASC"),
     candidateByPair: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? AND counterparty_id = ?"),
@@ -158,6 +167,13 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
     `),
     deleteCandidate: db.prepare("DELETE FROM match_candidates WHERE receiver_task_id = ? AND counterparty_id = ?"),
     insertEvent: db.prepare("INSERT INTO audit_events(task_id, type, payload_json, created_at) VALUES (?, ?, ?, ?)"),
+    insertOutbox: db.prepare(`
+      INSERT INTO outbox_events(
+        id, aggregate_type, aggregate_id, event_type, payload_json,
+        dedupe_key, status, available_at, created_at
+      ) VALUES (?, 'task', ?, ?, ?, ?, 'pending', ?, ?)
+      ON CONFLICT(dedupe_key) DO NOTHING
+    `),
     eventsByTask: db.prepare("SELECT * FROM audit_events WHERE task_id = ? ORDER BY id DESC LIMIT ?")
   };
 
@@ -167,6 +183,18 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
 
   function appendEvent(taskId, type, payload, at = now()) {
     statements.insertEvent.run(taskId, type, JSON.stringify(payload || {}), at);
+  }
+
+  function enqueueTaskEvent(taskId, inputVersion, eventType, at, dedupeKey = `task:${taskId}:input:${inputVersion}`) {
+    statements.insertOutbox.run(
+      randomUUID(),
+      taskId,
+      eventType,
+      JSON.stringify({ taskId, inputVersion }),
+      dedupeKey,
+      at,
+      at
+    );
   }
 
   function transaction(work) {
@@ -226,6 +254,10 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       return statements.revokeSession.run(at, id).changes > 0;
     },
 
+    cleanupExpiredSessions(at = now()) {
+      return statements.deleteExpiredSessions.run(at).changes;
+    },
+
     addEvidence({ id, ownerId, kind, storagePath, originalName, mimeType, sha256 }) {
       statements.insertEvidence.run(id, ownerId, kind, storagePath, originalName, mimeType, sha256, now());
       return { id, kind };
@@ -261,11 +293,44 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
         : null;
     },
 
-    createTask({ id, ownerId, kind, label, payload, expiresAt, inputVersion = payload?.inputVersion || 1, clientRequestId = null }) {
-      const at = now();
-      statements.insertTask.run(id, ownerId, kind, label, JSON.stringify(payload), inputVersion, clientRequestId, at, at, expiresAt);
-      appendEvent(id, "task.created", { kind, label }, at);
-      return this.getTask(id);
+    createTaskIdempotent({ id, ownerId, kind, label, payload, expiresAt, inputVersion = payload?.inputVersion || 1, clientRequestId = null }) {
+      const startedAt = performance.now();
+      const result = transaction(() => {
+        if (clientRequestId) {
+          const replay = statements.taskByClientRequest.get(ownerId, clientRequestId);
+          if (replay) {
+            if (replay.kind !== kind) {
+              throw Object.assign(new Error("clientRequestId 已用于另一类任务"), {
+                status: 409,
+                code: "CLIENT_REQUEST_CONFLICT"
+              });
+            }
+            return { task: taskFromRow(replay), created: false };
+          }
+        }
+        const at = now();
+        const normalizedPayload = { ...(payload || {}), inputVersion };
+        statements.insertTask.run(
+          id,
+          ownerId,
+          kind,
+          label,
+          JSON.stringify(normalizedPayload),
+          inputVersion,
+          clientRequestId,
+          at,
+          at,
+          expiresAt
+        );
+        appendEvent(id, "task.created", { kind, label }, at);
+        enqueueTaskEvent(id, inputVersion, "task.match_requested", at);
+        return { task: taskFromRow(statements.taskById.get(id)), created: true };
+      });
+      return { ...result, enqueueLatencyMs: performance.now() - startedAt };
+    },
+
+    createTask(input) {
+      return this.createTaskIdempotent(input).task;
     },
 
     getTask(id) {
@@ -277,40 +342,93 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
     },
 
     listActiveTasks(kind = null) {
-      if (kind) return statements.activeTasksByKind.all(kind).map(taskFromRow);
+      const at = now();
+      if (kind) return statements.activeTasksByKind.all(kind, at).map(taskFromRow);
       return [
-        ...statements.activeTasksByKind.all("renter"),
-        ...statements.activeTasksByKind.all("supply")
+        ...statements.activeTasksByKind.all("renter", at),
+        ...statements.activeTasksByKind.all("supply", at)
       ].map(taskFromRow);
     },
 
     expireDueTasks(at = now()) {
-      const due = statements.expiringTasks.all(at).map((row) => row.id);
+      const due = statements.expiringTasks.all(at);
       if (!due.length) return 0;
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        for (const id of due) {
-          const result = statements.markTaskExpired.run(at, id);
-          if (result.changes) appendEvent(id, "task.expired", { status: "expired" }, at);
+      return transaction(() => {
+        let expired = 0;
+        for (const row of due) {
+          const inputVersion = Number(row.input_version) + 1;
+          const payload = { ...parseJson(row.payload_json, {}), inputVersion };
+          const result = statements.markTaskExpired.run(JSON.stringify(payload), inputVersion, at, row.id, row.input_version);
+          if (result.changes) {
+            appendEvent(row.id, "task.expired", { status: "expired", inputVersion }, at);
+            enqueueTaskEvent(row.id, inputVersion, "task.match_invalidated", at);
+            expired += 1;
+          }
         }
-        db.exec("COMMIT");
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-      return due.length;
+        return expired;
+      });
     },
 
     listOppositeTasks(kind, ownerId) {
       const opposite = kind === "renter" ? "supply" : "renter";
-      return statements.activeOppositeTasks.all(opposite, ownerId).map(taskFromRow);
+      return statements.activeOppositeTasks.all(opposite, now(), ownerId).map(taskFromRow);
     },
 
     setTaskStatus(id, ownerId, status) {
-      const at = now();
-      const result = statements.updateTaskStatus.run(status, at, id, ownerId);
-      if (result.changes) appendEvent(id, `task.${status}`, { status }, at);
-      return result.changes ? this.getTask(id) : null;
+      return transaction(() => {
+        const current = taskFromRow(statements.taskById.get(id));
+        if (!current || current.ownerId !== ownerId) return null;
+        if (current.status === status) return current;
+        const at = now();
+        const inputVersion = current.inputVersion + 1;
+        const payload = { ...current.payload, inputVersion };
+        const result = statements.updateTaskStatus.run(
+          status,
+          JSON.stringify(payload),
+          inputVersion,
+          at,
+          id,
+          ownerId,
+          current.inputVersion
+        );
+        if (!result.changes) return null;
+        appendEvent(id, `task.${status}`, { status, inputVersion }, at);
+        enqueueTaskEvent(
+          id,
+          inputVersion,
+          status === "active" ? "task.match_requested" : "task.match_invalidated",
+          at
+        );
+        return taskFromRow(statements.taskById.get(id));
+      });
+    },
+
+    bumpTaskInputVersion(id, ownerId, reason = "task_input_changed") {
+      return transaction(() => {
+        const current = taskFromRow(statements.taskById.get(id));
+        if (!current || current.ownerId !== ownerId) return null;
+        const at = now();
+        const inputVersion = current.inputVersion + 1;
+        const payload = { ...current.payload, inputVersion };
+        const updated = statements.updateTaskStatus.run(
+          current.status,
+          JSON.stringify(payload),
+          inputVersion,
+          at,
+          id,
+          ownerId,
+          current.inputVersion
+        );
+        if (!updated.changes) return null;
+        appendEvent(id, reason, { inputVersion }, at);
+        enqueueTaskEvent(
+          id,
+          inputVersion,
+          current.status === "active" ? "task.match_requested" : "task.match_invalidated",
+          at
+        );
+        return taskFromRow(statements.taskById.get(id));
+      });
     },
 
     deleteTask(id, ownerId) {
