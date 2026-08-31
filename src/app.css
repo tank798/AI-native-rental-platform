@@ -561,14 +561,16 @@ button { cursor: pointer; }
 
 .candidate-card { margin-bottom: 18px; }
 .candidate-card > button { width: 100%; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: white; text-align: left; box-shadow: 0 10px 26px rgba(17,17,20,.05); }
-.candidate-photo { position: relative; height: 176px; background-size: cover; background-position: center; }
-.room-one { background-image: url("../assets/room-sunlit.jpg"); }
-.room-two { background-image: url("../assets/room-lanehouse.jpg"); }
-.room-three { background-image: url("../assets/room-compact.jpg"); }
-.candidate-photo span,
-.candidate-photo b { position: absolute; top: 12px; padding: 7px 9px; border-radius: 9px; background: rgba(255,255,255,.92); backdrop-filter: blur(10px); font-size: 11px; }
-.candidate-photo span { left: 12px; font-family: var(--font-display); font-weight: 900; }
-.candidate-photo b { right: 12px; background: rgba(17,17,20,.86); color: white; }
+.candidate-photo { position: relative; height: 176px; overflow: hidden; background: #edf1f4; }
+.listing-photo { position: absolute; inset: 0; display: block; }
+.listing-photo img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.listing-photo-placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; background: linear-gradient(145deg, #edf1f4, #e4e9ed); color: #6f7881; }
+.listing-photo-placeholder .icon { width: 28px; height: 28px; }
+.listing-photo-placeholder span { font-size: 12px; font-weight: 750; }
+.candidate-photo > .candidate-index,
+.candidate-photo > .candidate-label { position: absolute; z-index: 2; top: 12px; padding: 7px 9px; border-radius: 9px; background: rgba(255,255,255,.92); backdrop-filter: blur(10px); font-size: 11px; }
+.candidate-photo > .candidate-index { left: 12px; font-family: var(--font-display); font-weight: 900; }
+.candidate-photo > .candidate-label { right: 12px; background: rgba(17,17,20,.86); color: white; }
 .candidate-copy { padding: 15px; }
 .candidate-copy > div:first-child { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
 .candidate-copy h2 { margin: 0; font-size: 18px; letter-spacing: -.03em; }
@@ -632,7 +634,7 @@ button { cursor: pointer; }
 .detail-topbar { position: absolute; z-index: 5; left: 0; right: 0; top: calc(42px + env(safe-area-inset-top)); display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; padding: 8px 13px; }
 .detail-topbar button { width: 42px; height: 42px; border: 0; border-radius: 50%; background: rgba(17,17,20,.72); color: white; backdrop-filter: blur(12px); display: grid; place-items: center; }
 .detail-topbar b { color: white; text-align: center; text-shadow: 0 1px 8px rgba(0,0,0,.5); }
-.detail-photo { height: 330px; background-size: cover; background-position: center; }
+.detail-photo { position: relative; height: 330px; overflow: hidden; background: #edf1f4; }
 .detail-sheet { position: relative; margin-top: -30px; padding: 25px var(--screen-x) 35px; border-radius: 30px 30px 0 0; background: white; }
 .detail-title { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .detail-title h1 { margin: 0; font-size: 24px; line-height: 1.18; }
@@ -1966,14 +1968,14 @@ button {
   height: 168px;
 }
 
-.candidate-photo span,
-.candidate-photo b {
+.candidate-photo > .candidate-index,
+.candidate-photo > .candidate-label {
   border-radius: 10px;
   background: rgba(246, 251, 255, .9);
   color: #375e85;
 }
 
-.candidate-photo b {
+.candidate-photo > .candidate-label {
   background: rgba(73, 125, 184, .86);
   color: #fff;
 }
@@ -2856,12 +2858,14 @@ button {
 }
 
 .share-preview-photo {
+  position: relative;
   width: 76px;
   height: 66px;
+  overflow: hidden;
   border-radius: 13px;
-  background-position: center;
-  background-size: cover;
 }
+
+.public-photo-consent { margin-top: 12px; align-items: flex-start; color: var(--ink-2); font-size: 12px; line-height: 1.45; }
 
 .share-preview b,
 .share-preview span {
@@ -3445,8 +3449,8 @@ select:focus-visible {
   backdrop-filter: blur(14px);
 }
 
-.candidate-photo span,
-.candidate-photo b {
+.candidate-photo > .candidate-index,
+.candidate-photo > .candidate-label {
   border: 1px solid rgba(17, 17, 20, .07);
   background: rgba(241, 241, 243, .92);
   color: #111114;

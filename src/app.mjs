@@ -40,6 +40,7 @@ import {
   parseRenterWithServer,
   parseSupplyWithServer,
   setProfileContact,
+  uploadListingMedia,
   uploadEvidenceFile
 } from "./api-client.mjs";
 import { escapeAttribute, escapeText } from "./ui/safe-markup.mjs";
@@ -196,6 +197,7 @@ function initialProductState() {
     marketMode: "real",
     demoBanner: false,
     photoPreviews: [],
+    publicPhotoConsent: false,
     task: null,
     result: null,
     supplyResult: null,
@@ -239,6 +241,7 @@ function restoreProductState() {
       contactLoading: false,
       contactSubmitting: false,
       photoPreviews: fallback.photoPreviews,
+      publicPhotoConsent: false,
       answers: { ...fallback.answers, ...(saved.answers || {}) },
       supplyDraft: {
         ...fallback.supplyDraft,
@@ -273,6 +276,7 @@ function persistProductState() {
       contactLoading: false,
       contactSubmitting: false,
       photoPreviews: undefined,
+      publicPhotoConsent: false,
       result: compactResult(state.result),
       supplyResult: compactResult(state.supplyResult)
     }));
@@ -672,7 +676,7 @@ function supplyDraftScreen() {
         </div>
       </div></div>
     </div>
-    <section class="form-section photo-section conversational-photo"><div class="section-title"><h2>房源现场</h2><button data-action="open-photo-source">添加</button></div><div class="photo-grid">${state.photoPreviews.map((photo) => `<figure><img src="${escapeAttribute(photo.src)}" width="240" height="180" loading="lazy" alt="${escapeAttribute(photo.label)}"/><figcaption>${escapeText(photo.label)}</figcaption></figure>`).join("")}<button class="add-photo" data-action="open-photo-source">${icon("plus")}<span>拍摄或选择</span></button></div></section>
+    <section class="form-section photo-section conversational-photo"><div class="section-title"><h2>房源现场</h2><button data-action="open-photo-source">添加</button></div><div class="photo-grid">${state.photoPreviews.map((photo) => `<figure><img src="${escapeAttribute(photo.src)}" width="240" height="180" loading="lazy" alt="${escapeAttribute(photo.label)}"/><figcaption>${escapeText(photo.label)}</figcaption></figure>`).join("")}<button class="add-photo" data-action="open-photo-source">${icon("plus")}<span>拍摄或选择</span></button></div><label class="consent-row public-photo-consent"><input type="checkbox" data-action="toggle-photo-consent" ${state.publicPhotoConsent ? "checked" : ""} ${state.photoPreviews.length ? "" : "disabled"}/><span>同意将净化并移除位置元数据后的照片展示给匹配候选</span></label></section>
     <section class="form-section evidence-upload-panel"><div class="section-title"><h2>发布材料</h2><span>仅用于平台核验</span></div>
       ${evidenceUploadRow("identity", "身份材料", "身份证明图片或 PDF")}
       ${evidenceUploadRow("roleDocument", "发布角色材料", draft.role === "landlord" ? "产权人与发布人关系材料" : "当前承租人身份材料")}
@@ -745,10 +749,19 @@ function matchScreen() {
   </section>`;
 }
 
-function roomVisualClass(listingId) {
-  if (["home-nanyang", "home-longde"].includes(listingId)) return "room-one";
-  if (["home-jiangsu", "home-unknown-utilities"].includes(listingId)) return "room-two";
-  return "room-three";
+function primaryListingPhoto(listing) {
+  const photo = Array.isArray(listing?.photos) ? listing.photos[0] : null;
+  return photo?.src ? photo : null;
+}
+
+function listingPhotoMarkup(listing, { priority = false } = {}) {
+  const photo = primaryListingPhoto(listing);
+  if (!photo) {
+    return `<div class="listing-photo-placeholder" role="img" aria-label="暂无公开实拍">${icon("image")}<span>暂无公开实拍</span></div>`;
+  }
+  const width = Math.max(1, Number(photo.width) || 1200);
+  const height = Math.max(1, Number(photo.height) || 800);
+  return `<picture class="listing-photo"><img data-listing-photo src="${escapeAttribute(photo.src)}" alt="${escapeAttribute(photo.alt || "房源公开实拍")}" width="${width}" height="${height}" ${priority ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async" /></picture>`;
 }
 
 function minuteLabel(value) {
@@ -764,7 +777,7 @@ function candidateCard(candidate, index) {
     .replace("预算最轻", "省预算")
     .replace("居住条件最好", "住得好");
   return `<article class="candidate-card"><button data-action="open-candidate" data-id="${escapeAttribute(listing.id)}">
-    <div class="candidate-photo ${roomVisualClass(listing.id)}"><span>0${index + 1}</span><b>${escapeText(selectionLabel)}</b></div>
+    <div class="candidate-photo">${listingPhotoMarkup(listing, { priority: index === 0 })}<span class="candidate-index">0${index + 1}</span><b class="candidate-label">${escapeText(selectionLabel)}</b></div>
     <div class="candidate-copy"><div><h2>${escapeText(listing.shortTitle)}</h2><strong>¥${formatInteger(candidate.agreedRent)}<small>/月</small></strong></div><p>${escapeText(listing.station)} · 步行 ${minuteLabel(listing.walkMinutes)} · 通勤 ${minuteLabel(listing.commuteMinutes)}</p><div class="candidate-tags"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.roommateCount)} 位室友</span><span>${escapeText(candidate.caveats[0] || "条件无冲突")}</span></div></div>
   </button></article>`;
 }
@@ -981,12 +994,6 @@ function listingShareText(candidate) {
   ].join("\n");
 }
 
-function listingImagePath(listingId) {
-  if (["home-nanyang", "home-longde"].includes(listingId)) return "./assets/room-sunlit.jpg";
-  if (["home-jiangsu", "home-unknown-utilities"].includes(listingId)) return "./assets/room-lanehouse.jpg";
-  return "./assets/room-compact.jpg";
-}
-
 async function shareCandidate(candidate) {
   const text = listingShareText(candidate);
   if (!navigator.share) {
@@ -996,7 +1003,10 @@ async function shareCandidate(candidate) {
 
   const shareData = { title: candidate.listing.shortTitle, text, url: location.href };
   try {
-    const response = await fetch(listingImagePath(candidate.listing.id));
+    const photo = primaryListingPhoto(candidate.listing);
+    if (!photo) throw new Error("listing has no public photo");
+    const response = await fetch(photo.src, { credentials: "same-origin" });
+    if (!response.ok) throw new Error("public listing photo is unavailable");
     const blob = await response.blob();
     const file = new File([blob], "房源照片.jpg", { type: blob.type || "image/jpeg" });
     if (navigator.canShare?.({ files: [file] })) shareData.files = [file];
@@ -1079,7 +1089,7 @@ function candidateDetail() {
   const realCase = Boolean(candidate.matchCaseId);
   return `<section class="detail-screen">
     <div class="detail-topbar"><button data-action="back-root" aria-label="返回候选">${icon("back")}</button><b>${escapeText(candidate.selectionLabel)}</b><button data-action="open-share" aria-label="分享房源">${icon("share")}</button></div>
-    <div class="detail-photo ${roomVisualClass(listing.id)}"></div>
+    <div class="detail-photo">${listingPhotoMarkup(listing, { priority: true })}</div>
     <div class="detail-sheet">
       <div class="detail-title"><div><h1>${escapeText(listing.shortTitle)}</h1><p>${escapeText(listing.station)} · 步行${minuteLabel(listing.walkMinutes)}</p></div><b>¥${formatInteger(candidate.agreedRent)}<small>/月</small></b></div>
       <div class="detail-facts"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.floor)}/${escapeText(listing.room.totalFloors)} 层</span><span>${escapeText(listing.room.roommateCount)} 位室友</span></div>
@@ -1147,7 +1157,7 @@ function shareSheet() {
   const candidate = activeCandidate();
   if (!candidate) return "";
   const contactAction = `<button class="source-option" disabled>${icon("contact")}<span>${candidate.matchCaseId ? "联系方式不会进入分享内容" : "演示候选不开放联系方式"}</span>${icon("lock")}</button>`;
-  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo ${roomVisualClass(candidate.listing.id)}"></div><div><b>${escapeText(candidate.listing.shortTitle)}</b><span>¥${formatInteger(candidate.agreedRent)}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button>${contactAction}</section></div>`;
+  return `<div class="modal-scrim" data-action="close-sheet-from-scrim"><section class="bottom-sheet compact-sheet share-sheet" data-sheet-body><div class="sheet-handle"></div><header><h2>转发房源</h2><button data-action="close-sheet" aria-label="关闭">${icon("close")}</button></header><div class="share-preview"><div class="share-preview-photo">${listingPhotoMarkup(candidate.listing)}</div><div><b>${escapeText(candidate.listing.shortTitle)}</b><span>¥${formatInteger(candidate.agreedRent)}/月</span></div></div><button class="source-option" data-action="share-listing">${icon("share")}<span>分享房源卡片</span>${icon("arrow")}</button><button class="source-option" data-action="copy-listing">${icon("copy")}<span>复制文字摘要</span>${icon("arrow")}</button>${contactAction}</section></div>`;
 }
 
 function labSheet() {
@@ -1509,6 +1519,7 @@ function resetAll() {
     supplyEvidenceRefs: {},
     evidenceUploading: null,
     photoPreviews: [],
+    publicPhotoConsent: false,
     task: null,
     result: null,
     supplyResult: null,
@@ -1594,7 +1605,7 @@ app.addEventListener("change", async (event) => {
   const files = [...input.files].slice(0, 6);
   const previews = await Promise.all(files.map((file) => new Promise((resolve) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ src: reader.result, label: file.name.replace(/\.[^.]+$/, "") || "房源照片" });
+    reader.onload = () => resolve({ src: reader.result, label: file.name.replace(/\.[^.]+$/, "") || "房源照片", file });
     reader.readAsDataURL(file);
   })));
   state.photoPreviews = [...state.photoPreviews, ...previews].slice(-6);
@@ -1614,6 +1625,15 @@ app.addEventListener("change", async (event) => {
     showToast(error.message || "现场照片上传失败");
   }
 });
+
+app.addEventListener("error", (event) => {
+  const image = event.target.closest?.("img[data-listing-photo]");
+  if (!image || image.dataset.fallbackApplied === "true") return;
+  image.dataset.fallbackApplied = "true";
+  image.src = "./assets/media-placeholder.svg";
+  image.alt = "房源图片暂不可用";
+  image.removeAttribute("fetchpriority");
+}, true);
 
 app.addEventListener("keydown", (event) => {
   const draft = event.target.closest('[data-input="draft-text"]');
@@ -1650,7 +1670,7 @@ app.addEventListener("click", async (event) => {
     case "close-sheet":
     case "close-sheet-from-scrim": state.sheet = null; state.contactSubmitting = false; render(); break;
     case "create-renter": state.sheet = null; state.flow = "renter"; state.renterStage = "input"; state.renterFieldStates = {}; state.renterInputVersion = 0; render(); break;
-    case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyFieldStates = {}; state.supplyInputVersion = 0; state.supplyEvidenceRefs = {}; state.photoPreviews = []; render(); break;
+    case "create-supply": state.sheet = null; state.flow = "supply"; state.supplyStage = "input"; state.supplyText = ""; state.parsedSupply = null; state.supplyDraft = freshSupplyDraft(); state.supplyFieldStates = {}; state.supplyInputVersion = 0; state.supplyEvidenceRefs = {}; state.photoPreviews = []; state.publicPhotoConsent = false; render(); break;
     case "cancel-flow": state.flow = null; state.page = "root"; render(); break;
     case "voice-input": startVoiceInput(); break;
     case "home-intake": beginIntake(); break;
@@ -1742,9 +1762,21 @@ app.addEventListener("click", async (event) => {
           fieldStates: state.supplyFieldStates,
           evidenceRefs: state.supplyEvidenceRefs
         });
+        let failedPhotoUploads = 0;
+        if (state.publicPhotoConsent) {
+          for (const photo of state.photoPreviews) {
+            if (!photo.file) continue;
+            try {
+              await uploadListingMedia(snapshot.task.id, photo.file, photo.label);
+            } catch {
+              failedPhotoUploads += 1;
+            }
+          }
+        }
         state.supplyResult = { scanned: snapshot.task.scanned, candidates: snapshot.candidates, audit: snapshot.events || [] };
         await launchBearAgent(app.querySelector('[data-bear-id="supply-review-bear"]'));
         startMatching("supply", snapshot.task);
+        if (failedPhotoUploads) showToast(`${failedPhotoUploads} 张公开照片处理失败，任务已正常发布`);
       } catch (error) {
         target.disabled = false;
         showToast(error.message || "发布失败");
@@ -1831,6 +1863,7 @@ app.addEventListener("click", async (event) => {
     case "open-report": state.sheet = "report"; render(); break;
     case "set-report-type": state.reportType = value; render(); break;
     case "toggle-report-evidence": state.reportHasEvidence = target.checked; break;
+    case "toggle-photo-consent": state.publicPhotoConsent = target.checked; break;
     case "submit-report": {
       const candidate = activeCandidate();
       if (!candidate) break;

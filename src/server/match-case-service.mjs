@@ -12,7 +12,7 @@ function counterpartId(matchCase, taskId) {
 }
 
 /** Coordinates one symmetric write for case state and both candidate views. */
-export function createMatchCaseService({ taskRepository, matchCaseRepository, clock = createClock(), onCaseEvaluated = null }) {
+export function createMatchCaseService({ taskRepository, matchCaseRepository, mediaRepository = null, clock = createClock(), onCaseEvaluated = null }) {
   if (!taskRepository || !matchCaseRepository) throw new Error("match case service requires task and case repositories");
 
   function projectionForRenter(evaluation, matchCase, supplyTask) {
@@ -21,8 +21,9 @@ export function createMatchCaseService({ taskRepository, matchCaseRepository, cl
       matchCaseId: matchCase.id,
       selectionLabel: evaluation.status === "clarifying" ? "条件待确认" : "条件匹配",
       listing: {
-        ...evaluation.renterCandidateProjection.listing,
-        id: `task-listing-${supplyTask.id}`
+      ...evaluation.renterCandidateProjection.listing,
+        id: `task-listing-${supplyTask.id}`,
+        photos: mediaRepository?.listPublicForTask(supplyTask.id) || []
       }
     };
   }

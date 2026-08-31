@@ -17,6 +17,14 @@ test("语料库包含 100 条出租文案和 100 条找房需求", () => {
   assert.equal(tenantCopyCases.length, 100);
   assert.equal(marketplaceListings.length, 100);
   assert.equal(marketplaceTenants.length, 100);
+  assert.ok(marketplaceListings.every((listing) => listing.photos?.length === 1));
+  assert.ok(marketplaceListings.every((listing) => {
+    const photo = listing.photos[0];
+    return /^\.\/assets\/room-(?:sunlit|lanehouse|compact)\.jpg$/u.test(photo.src)
+      && photo.alt.length >= 10
+      && photo.width === 724
+      && photo.height === 724;
+  }));
 });
 
 test("100 条出租文案的核心字段全部按真值识别", () => {
@@ -57,6 +65,7 @@ test("100×100 找房市场既能匹配也允许真实空结果", () => {
   assert.ok(results.some((result) => result.candidates.length === 0));
   assert.ok(results.every((result) => result.candidates.length <= 3));
   assert.ok(results.flatMap((result) => result.candidates).every((candidate) => ["landlord", "subletter"].includes(candidate.listing.role)));
+  assert.ok(results.flatMap((result) => result.candidates).every((candidate) => candidate.listing.photos?.[0]?.alt));
 });
 
 test("合规出租任务会反向扫描 100 位真实测试租客", () => {

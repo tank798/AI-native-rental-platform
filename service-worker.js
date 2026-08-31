@@ -1,4 +1,4 @@
-const CACHE_NAME = "zhunaer-app-shell-v5";
+const CACHE_NAME = "zhunaer-app-shell-v6";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -20,6 +20,7 @@ const APP_SHELL = [
   "./assets/bear-agent.svg",
   "./assets/bear-agent-anchor.png",
   "./assets/user-avatar.png",
+  "./assets/media-placeholder.svg",
   "./assets/room-sunlit.jpg",
   "./assets/room-lanehouse.jpg",
   "./assets/room-compact.jpg"
@@ -39,14 +40,24 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  if (new URL(event.request.url).pathname.startsWith("/api/")) return;
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin !== self.location.origin || requestUrl.pathname.startsWith("/api/")) return;
+  const allowedPaths = new Set(APP_SHELL.map((item) => new URL(item, self.location.origin).pathname));
+  if (!allowedPaths.has(requestUrl.pathname)) return;
   event.respondWith(
     fetch(event.request, { cache: "no-store" })
       .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
         return response;
       })
-      .catch(() => caches.match(event.request))
+      .catch(async () => {
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        if (event.request.destination === "image") return caches.match("./assets/media-placeholder.svg");
+        return Response.error();
+      })
   );
 });

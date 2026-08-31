@@ -12,6 +12,8 @@ import { parseSupplyText } from "./src/supply-parser.mjs";
 import { openRentalDatabase } from "./src/server/database.mjs";
 import { createIntakeService } from "./src/server/intake-service.mjs";
 import { createMatchingService } from "./src/server/matching-service.mjs";
+import { createMediaRepository } from "./src/server/media-repository.mjs";
+import { createMediaService } from "./src/server/media-service.mjs";
 import { createRateLimiter } from "./src/server/rate-limit.mjs";
 import { parseContactEncryptionKey } from "./src/server/contact-service.mjs";
 import { assertSameOrigin, httpError, readJson } from "./src/server/request-guards.mjs";
@@ -22,6 +24,7 @@ import { createVerificationService } from "./src/server/verification-service.mjs
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const EVIDENCE_JSON_LIMIT = 12 * 1024 * 1024;
+const MEDIA_JSON_LIMIT = 12 * 1024 * 1024;
 const EVIDENCE_KINDS = new Set(["identity", "roleDocument", "rightsDocument", "livePhotoChallenge"]);
 const MIME_EXTENSIONS = new Map([
   ["image/jpeg", ".jpg"],
@@ -109,6 +112,24 @@ function text(response, status, body) {
     "Cache-Control": "no-store"
   });
   response.end(body);
+}
+
+async function sendMedia(request, response, descriptor) {
+  const stat = await fsPromises.stat(descriptor.path).catch(() => null);
+  if (!stat?.isFile()) throw httpError(404, "MEDIA_NOT_FOUND", "公开房源照片不存在");
+  const headers = {
+    ...securityHeaders(),
+    "Content-Type": descriptor.mimeType,
+    "Content-Length": stat.size,
+    "Cache-Control": "private, no-store",
+    ETag: descriptor.etag
+  };
+  if (request.headers["if-none-match"] === descriptor.etag) {
+    response.writeHead(304, { ...securityHeaders(), "Cache-Control": headers["Cache-Control"], ETag: descriptor.etag });
+    return response.end();
+  }
+  response.writeHead(200, headers);
+  fs.createReadStream(descriptor.path).pipe(response);
 }
 
 function publicTask(task) {
@@ -267,11 +288,14 @@ export function createRentalServer(options = {}) {
   fs.mkdirSync(uploadRoot, { recursive: true });
   const repository = openRentalDatabase(databasePath, { clock });
   const verification = createVerificationService({ repository, clock });
+  const mediaRepository = createMediaRepository({ database: repository, clock });
+  const media = createMediaService({ mediaRepository, uploadRoot, clock });
   const matching = createMatchingService(repository, {
     marketMode,
     clock,
     contactEncryptionKey,
-    onContactSecurityError: options.onContactSecurityError
+    onContactSecurityError: options.onContactSecurityError,
+    mediaRepository
   });
   const sessions = createSessionService({ repository, secureCookies, now: clock.now });
   const rateLimiter = options.rateLimiter || createRateLimiter({ now: clock.nowMs });
@@ -476,6 +500,11 @@ export function createRentalServer(options = {}) {
       if (!status) return json(response, 404, { error: "材料不存在", code: "EVIDENCE_NOT_FOUND" });
       return json(response, 200, status);
     }
+    const mediaReadRoute = url.pathname.match(/^\/api\/media\/([^/]+)$/);
+    if (request.method === "GET" && mediaReadRoute) {
+      const descriptor = media.getReadable(decodeURIComponent(mediaReadRoute[1]), session.id);
+      return sendMedia(request, response, descriptor);
+    }
     if (request.method === "POST" && url.pathname === "/api/tasks") {
       assertSameOrigin(request);
       enforceWriteLimit(request, session);
@@ -496,6 +525,24 @@ export function createRentalServer(options = {}) {
         const body = await readJson(request);
         return json(response, 200, { contact: matching.contacts.set(session.id, body) });
       }
+    }
+
+    const mediaUploadRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/media$/);
+    if (request.method === "POST" && mediaUploadRoute) {
+      assertSameOrigin(request);
+      enforceWriteLimit(request, session);
+      const taskId = decodeURIComponent(mediaUploadRoute[1]);
+      const body = await readJson(request, { limitBytes: MEDIA_JSON_LIMIT });
+      const result = await media.uploadPublic({
+        taskId,
+        ownerId: session.id,
+        mimeType: body.mimeType,
+        data: body.data,
+        alt: body.alt,
+        publicConsent: body.publicConsent
+      });
+      matching.processTask(taskId);
+      return json(response, result.duplicate ? 200 : 201, result);
     }
 
     const taskMatchesRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/matches$/);
@@ -579,6 +626,15 @@ export function createRentalServer(options = {}) {
         matching.processTask(task.id);
         return json(response, 200, { task: publicTask(updated) });
       }
+      if (request.method === "DELETE") {
+        assertSameOrigin(request);
+        enforceWriteLimit(request, session);
+        repository.setTaskStatus(task.id, session.id, "closed");
+        matching.processTask(task.id);
+        const queuedMedia = media.deleteForTask(task.id, session.id);
+        repository.deleteTask(task.id, session.id);
+        return json(response, 200, { deleted: true, queuedMedia });
+      }
     }
     return json(response, 404, { error: "API 不存在", code: "API_NOT_FOUND" });
   }
@@ -619,6 +675,8 @@ export function createRentalServer(options = {}) {
     repository,
     matching,
     verification,
+    media,
+    mediaRepository,
     clock,
     intake,
     sessions,

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title description">
+  <title id="title">房源图片暂不可用</title>
+  <desc id="description">中性灰色图片占位，不代表任何具体房源。</desc>
+  <rect width="1200" height="800" fill="#edf1f4"/>
+  <g fill="none" stroke="#a8b1b9" stroke-linecap="round" stroke-linejoin="round" stroke-width="18">
+    <rect x="430" y="245" width="340" height="250" rx="34"/>
+    <circle cx="535" cy="340" r="34"/>
+    <path d="m466 458 118-112 80 75 46-43 60 80"/>
+  </g>
+  <text x="600" y="570" fill="#6f7881" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="34" font-weight="650" text-anchor="middle">图片暂不可用</text>
+</svg>

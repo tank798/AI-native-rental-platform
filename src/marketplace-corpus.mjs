@@ -26,6 +26,11 @@ export const marketplaceAreas = [
 const numberWords = ["零", "一", "二", "三", "四"];
 const occupations = ["产品经理", "设计师", "研究生", "工程师", "咨询顾问", "教师", "编辑", "医护", "金融从业", "实习生"];
 const aliases = ["林同学", "顾女士", "许同学", "周先生", "沈女士", "陈同学", "唐女士", "陆女士", "韩同学", "夏女士"];
+const fixturePhotos = [
+  { src: "./assets/room-sunlit.jpg", alt: "朝南卧室实拍，窗边有书桌和自然采光", width: 724, height: 724 },
+  { src: "./assets/room-lanehouse.jpg", alt: "里弄住宅卧室实拍，木质家具与窗边采光", width: 724, height: 724 },
+  { src: "./assets/room-compact.jpg", alt: "紧凑卧室实拍，床铺、收纳和过道清晰可见", width: 724, height: 724 }
+];
 
 function isoDay(day) {
   return `2026-09-${String(day).padStart(2, "0")}`;
@@ -194,6 +199,7 @@ function buildLandlordCase(index) {
     lastVerifiedDays: risk === "stale" ? 35 : index % 3,
     freshness: risk === "stale" ? "stale" : "live",
     evidence,
+    photos: [{ ...fixturePhotos[index % fixturePhotos.length] }],
     photoTone: ["sage", "clay", "blue", "slate"][index % 4],
     photoLabel: risk === "duplicate_photo" ? "跨平台参考图" : "房源现场图"
   };

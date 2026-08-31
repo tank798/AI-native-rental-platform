@@ -143,6 +143,10 @@ export function setServerTaskStatus(taskId, status) {
   });
 }
 
+export function deleteServerTask(taskId) {
+  return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
+
 function fileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -157,6 +161,19 @@ export async function uploadEvidenceFile(file, kind) {
   return apiRequest("/api/evidence", {
     method: "POST",
     body: JSON.stringify({ kind, name: file.name, mimeType: file.type, data })
+  });
+}
+
+export async function uploadListingMedia(taskId, file, alt) {
+  const data = await fileAsBase64(file);
+  return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/media`, {
+    method: "POST",
+    body: JSON.stringify({
+      mimeType: file.type,
+      data,
+      alt,
+      publicConsent: true
+    })
   });
 }
 

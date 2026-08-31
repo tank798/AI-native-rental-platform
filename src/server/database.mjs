@@ -145,6 +145,7 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       WHERE id = ?
     `),
     updateTaskStatus: db.prepare("UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND owner_id = ?"),
+    deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND owner_id = ?"),
     candidatesByTask: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? ORDER BY created_at ASC"),
     candidateByPair: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? AND counterparty_id = ?"),
     insertCandidate: db.prepare(`
@@ -310,6 +311,10 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       const result = statements.updateTaskStatus.run(status, at, id, ownerId);
       if (result.changes) appendEvent(id, `task.${status}`, { status }, at);
       return result.changes ? this.getTask(id) : null;
+    },
+
+    deleteTask(id, ownerId) {
+      return statements.deleteTask.run(id, ownerId).changes > 0;
     },
 
     replaceCandidates(taskId, candidates, scanned) {

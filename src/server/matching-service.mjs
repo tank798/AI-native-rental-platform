@@ -74,7 +74,8 @@ export function createMatchingService(repository, {
   marketMode = "real",
   clock = createClock(),
   contactEncryptionKey = null,
-  onContactSecurityError = () => {}
+  onContactSecurityError = () => {},
+  mediaRepository = null
 } = {}) {
   const normalizedMarketMode = normalizeMarketMode(marketMode);
   const effectiveContactKey = contactEncryptionKey || (normalizedMarketMode === "demo" ? Buffer.alloc(32, 0x44).toString("base64") : null);
@@ -107,6 +108,7 @@ export function createMatchingService(repository, {
   const matchCases = createMatchCaseService({
     taskRepository,
     matchCaseRepository,
+    mediaRepository,
     clock,
     onCaseEvaluated: (context) => clarifications.syncForCase(context)
   });
@@ -119,6 +121,7 @@ export function createMatchingService(repository, {
         id: `task-listing-${supplyTask.id}`,
         shortTitle: supplyTask.payload.draft.title || `${supplyTask.payload.draft.location}个人房源`,
         title: supplyTask.payload.draft.title || `${supplyTask.payload.draft.location}个人房源`,
+        photos: mediaRepository?.listPublicForTask(supplyTask.id) || [],
         __taskId: supplyTask.id,
         __ownerId: supplyTask.ownerId
       };

@@ -134,6 +134,14 @@ flowchart LR
 - 禁止中介费、服务费、信息费、带看费和签约费。
 - “不收任何中介费服务费”不会被误判为中介；“中介代发”即使声称零收费仍会触发角色风险。
 
+### 公开房源图片
+
+- 私密身份、出租权和现场核验材料与公开房源图片使用不同的存储和读取路径。
+- 公开图片必须由发布者明确授权；服务端不相信扩展名或声明 MIME，而是用 Sharp 真实解码。
+- JPEG、PNG 和 WebP 会自动旋转、限制最长边并重新编码为 WebP；EXIF、GPS、XMP 和 IPTC 元数据不会进入公开 derivative。
+- 候选接口只返回受控媒体 ID、说明和尺寸，不返回私密原图、核验材料 ID 或任何磁盘路径。
+- 没有公开实拍时显示中性占位，不拿演示样板房冒充用户房源。
+
 ### 结果与隐私
 
 - 租客候选隐藏房东最低授权价和精确地址。
@@ -158,6 +166,7 @@ flowchart TB
         Match[双边匹配服务]
         Scheduler[10 秒持续扫描器]
         Upload[私有材料上传]
+        Media[公开图片解码与净化]
     end
 
     subgraph Provider[外部模型]
@@ -176,6 +185,7 @@ flowchart TB
     Intake --> Qwen
     Intake --> Policy
     API --> Upload
+    API --> Media
     API --> Match
     Scheduler --> Match
     Match --> Policy
@@ -194,6 +204,8 @@ flowchart TB
 | HTTP 服务 | `server.mjs` | 静态资源、REST API、会话授权、上传和调度器 |
 | Intake 服务 | `src/server/intake-service.mjs` | 规则解析、模型调用、保守合并和回退 |
 | 匹配服务 | `src/server/matching-service.mjs` | 双边任务扫描、候选增量更新、公开结果脱敏 |
+| 媒体服务 | `src/server/media-service.mjs` | 图片解码、像素与动画限制、元数据清除和受控读取 |
+| 媒体仓储 | `src/server/media-repository.mjs` | 公开授权、内容哈希、候选可见性和清理队列 |
 | SQLite 仓储 | `src/server/database.mjs` | 会话、材料、任务、候选和审计事件持久化 |
 | 需求解析 | `src/demand-parser.mjs` | 租客文本的字段与缺口识别 |
 | 供给解析 | `src/supply-parser.mjs` | 房源字段、角色、收费和风险识别 |
@@ -256,7 +268,7 @@ flowchart TB
 - 浏览器首次进入时创建随机会话 secret，并只通过 HttpOnly、SameSite Cookie 发送。
 - 服务端只保存 secret 哈希；浏览器 JavaScript 和 localStorage 都拿不到原值。
 - 任务、材料和候选读取都验证当前会话所有权。
-- 上传材料按 `data/uploads/<owner-id>/` 分目录保存，文件权限设置为仅当前用户可读写。
+- 私密核验材料按用户隔离；公开图片原件进入 `private-originals/`，净化结果进入 `public-derivatives/`，两个目录均不做静态映射。
 - 精确地址、材料存储路径和私密价格不会进入公开候选负载。
 
 ### 演示安全提醒
@@ -273,7 +285,7 @@ flowchart TB
 - 必填：本机生成的联系人加密密钥；real 模式缺少或格式错误时拒绝启动。
 - 可选：SiliconFlow API Key，用于启用 Qwen3.5；没有模型 Key 仍可使用安全解析模式。
 
-本项目当前不依赖第三方 npm 运行时包，SQLite 使用 Node.js 内置 `node:sqlite`。
+SQLite 使用 Node.js 内置 `node:sqlite`；公开图片处理使用已锁定版本的 `sharp`，安装后会按当前 macOS/Linux 平台加载对应二进制。
 
 ### 1. 克隆项目
 
@@ -340,9 +352,10 @@ npm start
 5. 点击底部加号，新建“我要出租”任务。
 6. 输入房源、角色、租金、入住、室友和设施。
 7. 使用测试图片完成四类材料演示，不要上传真实证件。
-8. 在“我的 → 设置”中为两端账号分别保存测试联系方式。
-9. 双方确认同一版条款，确认只有单方时联系人仍锁定。
-10. 第二方确认后主动点击“查看联系方式”，验证页面离开后原值消失。
+8. 若要把房间照片展示给匹配候选，单独勾选“净化后公开”；未勾选时只保留私密核验用途。
+9. 在“我的 → 设置”中为两端账号分别保存测试联系方式。
+10. 双方确认同一版条款，确认只有单方时联系人仍锁定。
+11. 第二方确认后主动点击“查看联系方式”，验证页面离开后原值消失。
 
 ### 重置本地演示数据
 
@@ -365,6 +378,9 @@ npm start
 | `GET` | `/api/tasks` | 获取当前会话的任务列表，最新任务优先 |
 | `GET` | `/api/tasks/:id` | 获取任务、候选和审计事件快照 |
 | `PATCH` | `/api/tasks/:id` | 把任务设为 `active`、`paused` 或 `closed` |
+| `DELETE` | `/api/tasks/:id` | 删除本人任务，使公开图片立即失效并进入清理队列 |
+| `POST` | `/api/tasks/:id/media` | 明确授权后上传并净化公开房源图片 |
+| `GET` | `/api/media/:id` | 发布者或真实候选接收方读取净化后的 WebP |
 | `GET` | `/api/tasks/:id/matches` | 获取任务关联的本人可见双边案例 |
 | `GET` | `/api/matches/:id` | 获取条款、澄清和双方确认状态 |
 | `POST` | `/api/matches/:id/confirm` | 确认当前条款版本与哈希 |
@@ -401,6 +417,8 @@ SQLite 当前包含以下核心表：
 | `party_confirmations` | 双方、条款哈希、输入版本、决定、撤销时间 | 服务端确认历史 |
 | `profile_contacts` | 类型、AES-GCM 密文信封、掩码 | 私密联系人存储 |
 | `contact_grants` | 案例、条款与输入快照、有效期、撤销原因 | 联系方式读取能力 |
+| `listing_media` | 私密原图路径、公开 derivative、双哈希、尺寸、授权和删除状态 | 公开房源图片管线 |
+| `media_cleanup_queue` | 媒体、任务、待清理路径、尝试次数和完成时间 | 删除后的文件清理补偿 |
 | `match_events` | 案例、事件类型、脱敏 payload | 澄清、确认与授权审计 |
 
 当前使用 SQLite 是为了让完整链路可以零依赖复现。生产环境建议迁移到 PostgreSQL，并使用数据库行级安全策略、KMS、私有对象存储和不可变事件日志。
@@ -414,10 +432,11 @@ npm test
 npm run check
 ```
 
-当前测试共 53 项，覆盖：
+当前测试共 141 项，覆盖：
 
 - 租客与出租自然语言解析；
 - Qwen 结果不能覆盖规则明确事实；
+- MIME 伪装、文本伪图片、动画图、像素炸弹、EXIF/GPS 清除和公开媒体越权；
 - 个人转租零收费表达与中介伪装边界；
 - 发布材料不可跨会话复用；
 - 双边任务持久化和增量候选更新；
