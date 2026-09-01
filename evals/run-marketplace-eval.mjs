@@ -74,7 +74,6 @@ function quote(text) {
   return String(text).split("\n").map((line) => `> ${line}`).join("\n");
 }
 
-const startedAt = performance.now();
 const landlordResults = landlordCopyCases.map(landlordEvaluation);
 const tenantResults = tenantCopyCases.map(tenantEvaluation);
 
@@ -86,8 +85,6 @@ const supplyMatchResults = landlordCopyCases.map((caseItem) => ({
   caseItem,
   result: matchSupplyDraft(caseItem.draft, marketplaceTenants)
 }));
-const elapsedMs = Math.round(performance.now() - startedAt);
-
 const landlordChecks = landlordResults.flatMap((item) => item.checks);
 const tenantChecks = tenantResults.flatMap((item) => item.checks);
 const matchedDemandCount = demandMatchResults.filter((item) => item.result.candidates.length > 0).length;
@@ -113,7 +110,6 @@ const lines = [
   `- 找房方向：真实扫描 ${totalDemandPairs.toLocaleString("zh-CN")} 个供需配对；${matchedDemandCount} 条需求获得候选，${unmatchedDemandCount} 条因硬条件无交集返回空结果。`,
   `- 出租方向：${publishableSupplyCount} 条房源通过发布资格；真实扫描 ${totalSupplyPairs.toLocaleString("zh-CN")} 个反向配对；${matchedSupplyCount} 条获得租客候选。`,
   `- 市场池：${marketplaceCorpusStats.allowedListings} 套合规可用房源，${marketplaceCorpusStats.riskListings} 套风险或失效房源；交付非法候选 ${invalidCandidateCount} 个，公开日志私密边界泄露 ${privateLeakCount} 次。`,
-  `- 本轮离线全链路耗时：${elapsedMs} ms。`,
   "",
   "## 本轮发现并修复的识别问题",
   "",
@@ -164,7 +160,7 @@ tenantResults.forEach(({ caseItem, parsed, passed }, index) => {
   );
 });
 
-await fs.writeFile(casebookPath, `${lines.join("\n")}\n`, "utf8");
+await fs.writeFile(casebookPath, `${lines.join("\n").replace(/\n+$/u, "")}\n`, "utf8");
 
 const failed = [
   ...landlordResults.filter((item) => !item.passed).map((item) => item.caseItem.id),

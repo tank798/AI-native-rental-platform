@@ -151,12 +151,16 @@ flowchart LR
     UI[浏览器 UI] --> SESSION[会话 API]
     UI --> INTAKE[需求/房源结构化 API]
     UI --> EVIDENCE[私有材料上传 API]
-    UI --> TASKS[任务与候选 API]
+    UI --> TASKS[任务、案例与生命周期 API]
     TASKS --> SQLITE[(SQLite)]
     TASKS --> OUTBOX[事务 Outbox]
     OUTBOX --> WORKER[幂等匹配 Worker]
     WORKER --> MATCH[确定性风控与匹配闸门]
     MATCH --> SQLITE
+    TASKS --> EVENT[产品事件与聚合指标]
+    TASKS --> NOTICE[通知、举报与看房安排]
+    EVENT --> SQLITE
+    NOTICE --> SQLITE
     TIMER[定时补偿器] --> WORKER
     SQLITE --> TASKS
 ```
@@ -165,11 +169,11 @@ flowchart LR
 
 市场数据通过 `MARKET_MODE` 明确分流：默认 `real` 模式只扫描数据库中的真实用户任务；`demo` 模式额外加载 100×100 测试语料，并在界面持续显示演示标识。演示候选带 `counterpartyType=fixture`，后续双边案例服务据此保持真实案例边界。两个模式不会在同一个未标识结果集中混合。
 
-当前闭环的验证范围是本地单进程服务：SQLite 承载业务数据与事务 outbox，本地隔离目录承载私密材料、公开图片原件与净化 derivative，前端轮询读取最新结果。worker 用 `BEGIN IMMEDIATE` 和 `locked_at` 短租约实现单机竞争领取、指数退避和崩溃恢复；它是可替换的队列边界，不等同于多机消息系统。联系人以 AES-256-GCM 应用层密文保存；双方同版确认后，服务端才签发绑定条款哈希和双方输入版本的短期授权。公开图片只有在发布者明确同意后，才经过真实解码、旋转、限边、WebP 重编码和元数据清除进入候选。生产迁移将这些适配器替换为 PostgreSQL、私有对象存储、队列、推送和 KMS 包络加密，同时保持 `owner_id` 隔离、服务端证据引用校验、公开字段脱敏和 real/demo 分流语义。
+当前闭环的验证范围是本地单进程服务：SQLite 承载业务数据、事务 outbox、产品事件、通知、举报和看房安排，本地隔离目录承载私密材料、公开图片原件与净化 derivative，前端轮询读取最新结果。worker 用 `BEGIN IMMEDIATE` 和 `locked_at` 短租约实现单机竞争领取、指数退避和崩溃恢复；它是可替换的队列边界，不等同于多机消息系统。联系人以 AES-256-GCM 应用层密文保存；双方同版确认后，服务端才签发绑定条款哈希和双方输入版本的短期授权。公开图片只有在发布者明确同意后，才经过真实解码、旋转、限边、WebP 重编码和元数据清除进入候选。任务默认有效 14 天，到期前 48 小时写入一次持久提醒；暂停、关闭、过期或输入变化会撤销确认和联系人授权，并取消未完成看房提议。生产迁移将这些适配器替换为 PostgreSQL、私有对象存储、队列、推送和 KMS 包络加密，同时保持 `owner_id` 隔离、服务端证据引用校验、公开字段脱敏和 real/demo 分流语义。
 
 ### 6.2 SQLite 版本与升级边界
 
-本地数据库使用 `PRAGMA user_version` 管理连续版本，当前 schema 版本为 8。迁移顺序由 `src/server/migrations.mjs` 显式声明，对应 SQL 文件为：
+本地数据库使用 `PRAGMA user_version` 管理连续版本，当前 schema 版本为 9。迁移顺序由 `src/server/migrations.mjs` 显式声明，对应 SQL 文件为：
 
 1. `001-baseline.sql`：保留 v0.6 会话、材料、任务、候选和审计事件结构。
 2. `002-task-fields-and-outbox.sql`：增加任务输入版本、字段级真值和去重 outbox。
@@ -179,6 +183,7 @@ flowchart LR
 6. `006-contact-grant-snapshots.sql`：让联系人授权绑定条款哈希、双方输入版本和有效期，并保留撤销历史。
 7. `007-listing-media-metadata.sql`：补充公开图片双哈希、尺寸、说明、内容去重索引和独立清理队列。
 8. `008-transactional-matching-worker.sql`：增加 outbox worker 租约归属、失败时间、配对幂等作业和健康状态。
+9. `009-product-lifecycle.sql`：增加任务生命周期版本、看房响应与取消字段、产品事件、通知和举报表。
 
 每个版本在独立 SQLite 事务中执行；SQL 执行和 `user_version` 更新共同成功后才提交。程序读到更高版本时会拒绝启动，保护新 schema 免受旧程序写入。有表的旧库升级前会先执行 WAL checkpoint，再在同目录生成 `<database>.pre-v<version>.bak` 备份。
 
@@ -231,17 +236,18 @@ Web 原型已经使用系统文件选择器与相机入口。原生 iOS 版本�
 
 ## 9. 事件与统计
 
-统计面板不直接查询当前页面状态，而从事件聚合：
+统计面板不直接查询当前页面状态，而从 `product_events` 聚合：
 
-- `task.created`：新增一次任务；
-- `candidate.scanned`：已查看量；
-- `candidate.eligible`：硬条件合适量；
-- `candidate.delivered`：交付量；
-- `candidate.confirmed`：双方确认量；
-- `conversation.avoided`：被结构化问答或自动协商替代的往返次数；
-- `report.confirmed`：确认违规量。
+- `task.activated`：新增或恢复一次有效任务；
+- `candidate.created`：真实候选首次形成；
+- `clarification.completed`：目标方完成一项结构化澄清；
+- `terms.ready`：案例形成可供双方确认的公开条款；
+- `match.mutually_confirmed`：双方确认同一版条款；
+- `contact.unlocked`：服务端签发联系人授权；
+- `viewing.accepted`：对方接受看房安排；
+- `report.created`：用户提交持久举报。
 
-这样可以回放漏斗、解释数字来源，并避免统计和真实业务状态不一致。
+`npm run metrics:summary` 只输出固定聚合键、转化数量和首候选耗时 P50/P95。事件 schema 与递归私密字段检查拒绝联系人、精确地址、原话、预算上限、底价和材料路径。系统不再凭空计算“节省了多少条消息”，因为该数字没有真实事件来源。
 
 ## 10. 评测矩阵
 
@@ -284,4 +290,4 @@ Web 原型已经使用系统文件选择器与相机入口。原生 iOS 版本�
 
 ### 阶段三：交易闭环
 
-双方确认、预约看房、合同与支付能力。前两阶段稳定前，不让社区、公开评论或流量分发稀释核心匹配效率。
+当前本地闭环已经实现双方同版确认、联系人门禁和看房安排；生产阶段仍需合同、支付、争议处理与真实核验。前两阶段稳定前，不让社区、公开评论或流量分发稀释核心匹配效率。

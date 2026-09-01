@@ -5,7 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
-  testMatch: "ui-critical.spec.mjs",
+  testMatch: ["ui-critical.spec.mjs", "bilateral-e2e.spec.mjs"],
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,
@@ -20,4 +20,3 @@ export default defineConfig({
     video: "off"
   }
 });
-

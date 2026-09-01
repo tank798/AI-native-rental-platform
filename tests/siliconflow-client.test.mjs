@@ -59,3 +59,39 @@ test("坏 JSON 只触发一次格式修复重试，调用记录有界", async ()
 
   assert.equal(client.calls.length, 3);
 });
+
+test("provider 429 与超时都只重试一次并返回净化错误", async () => {
+  let rateLimitCalls = 0;
+  const rateLimited = new SiliconFlowClient({
+    apiKey: "test-key",
+    sleep: async () => {},
+    random: () => 0,
+    fetchImpl: async () => {
+      rateLimitCalls += 1;
+      return new Response("provider rate-limit details", { status: 429 });
+    }
+  });
+  await assert.rejects(
+    () => rateLimited.json({ stage: "rate-limit", system: "system", user: "user" }),
+    (error) => error.code === "AI_PROVIDER_ERROR" && !error.message.includes("provider rate-limit details")
+  );
+  assert.equal(rateLimitCalls, 2);
+  assert.equal(rateLimited.calls.at(-1).error_code, "HTTP_429");
+
+  let timeoutCalls = 0;
+  const timedOut = new SiliconFlowClient({
+    apiKey: "test-key",
+    sleep: async () => {},
+    random: () => 0,
+    fetchImpl: async () => {
+      timeoutCalls += 1;
+      throw Object.assign(new Error("internal timeout details"), { name: "TimeoutError" });
+    }
+  });
+  await assert.rejects(
+    () => timedOut.json({ stage: "timeout", system: "system", user: "user" }),
+    (error) => error.code === "AI_PROVIDER_ERROR" && !error.message.includes("internal timeout details")
+  );
+  assert.equal(timeoutCalls, 2);
+  assert.equal(timedOut.calls.at(-1).error_code, "AI_PROVIDER_ERROR");
+});

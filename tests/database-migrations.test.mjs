@@ -222,3 +222,30 @@ test("双边案例、open 澄清、确认和 outbox 去重均由数据库约束"
     VALUES ('bad-task', 'missing-owner', 'renter', 'active', 'bad', '{}', ?, ?, ?)
   `).run(at, at, at), /FOREIGN KEY/);
 });
+
+test("SQLite 写锁返回稳定 busy 错误，释放后同一写入可安全重试", async (t) => {
+  const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "zhunaer-sqlite-busy-"));
+  const databasePath = path.join(tempDir, "busy.sqlite");
+  const holder = new DatabaseSync(databasePath);
+  const writer = new DatabaseSync(databasePath);
+  t.after(async () => {
+    try { holder.exec("ROLLBACK"); } catch {}
+    holder.close();
+    writer.close();
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  holder.exec("CREATE TABLE writes(id TEXT PRIMARY KEY, value TEXT NOT NULL); BEGIN IMMEDIATE;");
+  holder.prepare("INSERT INTO writes(id, value) VALUES (?, ?)").run("holder", "in-flight");
+  writer.exec("PRAGMA busy_timeout = 1");
+  assert.throws(
+    () => writer.prepare("INSERT INTO writes(id, value) VALUES (?, ?)").run("retry-key", "first-attempt"),
+    (error) => error.code === "ERR_SQLITE_ERROR" && /locked|busy/u.test(error.message)
+  );
+
+  holder.exec("COMMIT");
+  writer.prepare("INSERT INTO writes(id, value) VALUES (?, ?)").run("retry-key", "retried");
+  const retried = writer.prepare("SELECT id, value FROM writes WHERE id = ?").get("retry-key");
+  assert.equal(retried.id, "retry-key");
+  assert.equal(retried.value, "retried");
+});
