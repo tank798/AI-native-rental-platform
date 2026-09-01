@@ -988,7 +988,13 @@ button { cursor: pointer; }
   align-items: flex-start;
 }
 
-.dialogue-card {
+/* 结构化摘要气泡与表单卡采用同一宽度规则，使两者右缘对齐。
+   对话气泡默认限宽到 min(82%, 292px) 是为了让纯文本读起来像说话，
+   但这两张卡装的是胶囊网格与表单，属于结构化内容，
+   限宽会导致它们与下方表单卡右缘错开（实测 356 vs 396）。
+   46px = 头像 38px + chat-line 的 gap 8px。 */
+.dialogue-card,
+.chat-bubble.is-summary {
   width: calc(100% - 46px);
   max-width: none;
   padding: 15px;

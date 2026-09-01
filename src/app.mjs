@@ -601,7 +601,7 @@ function renterClarify() {
     ${flowHeader("和找房分身确认")}
     <div class="rental-chat">
       <div class="chat-line is-user"><div class="chat-bubble">${escapeHtml(state.draftText || state.selectedLocations.join("、"))}</div></div>
-      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-avatar.webp" width="36" height="41" alt="" loading="lazy" decoding="async" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "<span>等你补充</span>"}</div></div></div>
+      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-avatar.webp" width="36" height="41" alt="" loading="lazy" decoding="async" /></span><div class="chat-bubble is-summary"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("") || "<span>等你补充</span>"}</div></div></div>
       <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-avatar.webp" width="36" height="41" alt="" loading="lazy" decoding="async" /></span><div class="chat-bubble dialogue-card">${questionMarkup}
         <div class="dialogue-fields">
           ${field("location", "区域", `<button class="dialogue-location" data-action="open-location"><span>${state.selectedLocations.length ? escapeText(state.selectedLocations.join("、")) : "打开地图选择"}</span>${icon("arrow")}</button>`)}
@@ -737,7 +737,7 @@ function supplyDraftScreen() {
     ${flowHeader("和出租分身确认")}
     <div class="rental-chat supply-chat">
       <div class="chat-line is-user"><div class="chat-bubble">${escapeHtml(state.supplyText)}</div></div>
-      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-avatar.webp" width="36" height="41" alt="" loading="lazy" decoding="async" /></span><div class="chat-bubble"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div></div></div>
+      <div class="chat-line is-agent"><span class="chat-avatar"><img src="./assets/bear-agent-avatar.webp" width="36" height="41" alt="" loading="lazy" decoding="async" /></span><div class="chat-bubble is-summary"><b>我先整理成这样</b><div class="chat-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}</div></div></div>
       <div class="chat-line is-agent is-form"><span class="chat-avatar"><img src="./assets/bear-agent-avatar.webp" width="36" height="41" alt="" loading="lazy" decoding="async" /></span><div class="chat-bubble dialogue-card"><b>再确认一下</b>
         <div class="dialogue-fields supply-dialogue-fields">
           <div class="dialogue-field"><b>身份</b><div class="role-options"><button data-action="set-supply-role" data-value="landlord" aria-pressed="${draft.role === "landlord"}">房东本人</button><button data-action="set-supply-role" data-value="subletter" aria-pressed="${draft.role === "subletter"}">当前租客</button></div></div>
