@@ -1,20 +1,56 @@
 @charset "UTF-8";
 
 /* Application foundations */
+/* ---------------------------------------------------------------------------
+   设计令牌（唯一来源）
+
+   历史上这里叠了 4 层主题，每层都重定义一遍同名变量：
+     L1 蓝色强调 #3157f6 → L2 冷调蓝灰 #68a8f3 → L3 单色 #111114 → L4 暖中性 #171717
+   CSS 变量在使用时解析、后定义覆盖前定义，因此全部规则实际只看到最后一层。
+   前三层是纯粹的噪音，还会误导后续改动（例如以为 --blue 是蓝色）。
+   现合并为一处，取当前实际生效值，渲染结果不变。
+
+   --blue / --blue-deep 在当前设计里等同于墨色：本产品刻意采用"以墨为主色"
+   的单色体系，强调色由排版与留白承担，而不是彩色。保留这两个名字仅为兼容
+   既有规则，新代码请直接使用 --ink。
+--------------------------------------------------------------------------- */
 :root {
   color-scheme: light;
-  --ink: #111114;
-  --ink-2: #3a3a40;
-  --line: #e8e8ec;
-  --soft: #f5f5f7;
-  --blue: #3157f6;
-  --blue-soft: #edf1ff;
-  --mint: #70efc0;
-  --danger: #dc303a;
-  --screen-x: 22px;
-  --radius: 24px;
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
-  --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
+
+  /* 中性墨色阶。统一色相 ~50°、饱和随明度递减（≤11.5%），
+     模拟纸张的暖度。此前 --ink 是纯灰（色相 0°、饱和 0%），
+     在最深、最显眼的一端脱离了暖色阶。 */
+  --ink: #1a1917;
+  --ink-2: #454440;
+  --ink-3: #7d7c77;
+
+  /* 分隔线与浅底 */
+  --line: #e6e4dc;
+  --soft: #f5f4ef;
+  --page: #f0efe9;
+
+  /* 主色（= 墨色，见上方说明） */
+  --blue: #1a1917;
+  --blue-deep: #1a1917;
+  --blue-soft: #f2f1ec;
+  --blue-mist: #e9e7e0;
+
+  /* 语义色。原 --danger 饱和 59.7%、--mint 色相 163° 冷绿，
+     在饱和 ≤6% 的暖中性画面里既刺眼又异色。
+     现降到 46% / 24% 并拉回暖侧，浅底压到 ~7% 做薄雾，
+     语义由文字颜色承担，而不是靠大面积色块。 */
+  --danger: #8f584d;
+  --danger-soft: #f7e9e6;
+  --sage: #5e7055;
+  --sage-soft: #e9f5e4;
+  /* 兼容既有规则中的 --mint 引用 */
+  --mint: #5e7055;
+
+  /* 版式与度量 */
+  --screen-x: 20px;
+  --radius: 22px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -158,14 +194,16 @@ button { cursor: pointer; }
 
 .demo-mode-banner {
   flex: 0 0 auto;
-  min-height: 30px;
-  padding: 6px 16px;
-  background: #fff3cd;
-  border-block: 1px solid #ead392;
-  color: #6d4d00;
+  min-height: 24px;
+  padding: 4px 16px;
+  background: var(--soft);
+  border-block: 1px solid var(--line);
+  color: var(--ink-3);
   text-align: center;
-  font-size: 12px;
-  font-weight: 800;
+  /* 演示模式是背景信息而非警示，用最小字号 + 字距而非高饱和黄色承担 */
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .04em;
   line-height: 1.4;
 }
 
@@ -626,7 +664,7 @@ button { cursor: pointer; }
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--blue), transparent 25%);
+  background: var(--ink-3);
 }
 
 .candidate-tags { display: flex; gap: 6px; overflow: hidden; }
@@ -931,7 +969,7 @@ button { cursor: pointer; }
   min-width: max-content;
   padding: 5px 10px;
   border-radius: 8px;
-  background: #f0f0f2;
+  background: var(--soft);
   color: #303137;
   font-size: 11px;
   font-weight: 620;
@@ -1181,7 +1219,7 @@ button { cursor: pointer; }
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #f0f0f2;
+  background: var(--soft);
   display: grid;
   place-items: center;
 }
@@ -1202,7 +1240,7 @@ button { cursor: pointer; }
 }
 
 .flow-kicker {
-  background: #f0f0f2;
+  background: var(--soft);
   color: #202126;
 }
 
@@ -1289,23 +1327,6 @@ body[data-motion="reduced"] *::before,
 body[data-motion="reduced"] *::after { animation: none !important; transition: none !important; }
 
 /* Application components and interaction states */
-:root {
-  --ink: #17233a;
-  --ink-2: #5c6b80;
-  --ink-3: #8794a7;
-  --line: #e7eef6;
-  --soft: #f5f9fd;
-  --blue: #68a8f3;
-  --blue-deep: #3e85dc;
-  --blue-soft: #eef6ff;
-  --blue-mist: #dcecff;
-  --danger: #d85761;
-  --mint: #8fd9c4;
-  --screen-x: 20px;
-  --radius: 22px;
-  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
-  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
-}
 
 html,
 body {
@@ -3110,17 +3131,6 @@ body[data-motion="reduced"] .search-node {
 
 /* Current visual system */
 /* Elys-inspired monochrome controls on a barely-blue canvas. */
-:root {
-  --ink: #111114;
-  --ink-2: #2e2e33;
-  --ink-3: #77777f;
-  --line: #e5e5e8;
-  --soft: #f2f2f4;
-  --blue: #111114;
-  --blue-deep: #111114;
-  --blue-soft: #f1f1f3;
-  --blue-mist: #ebebee;
-}
 
 html,
 body {
@@ -3351,7 +3361,7 @@ select:focus-visible {
 .profile-screen header p span,
 .insights-screen > header span {
   border-color: transparent;
-  background: #f0f0f2;
+  background: var(--soft);
   color: #111114;
 }
 
@@ -3505,7 +3515,7 @@ select:focus-visible {
 }
 
 .flow-kicker {
-  background: #f0f0f2;
+  background: var(--soft);
   color: #111114;
 }
 
@@ -3543,29 +3553,30 @@ select:focus-visible {
 
 .candidate-tags span,
 .tenant-main > div b {
-  background: #f0f0f2;
+  background: var(--soft);
 }
 
-/* 三种入选理由：沿用中性浅底胶囊，仅用低饱和色调区分，确保文字始终为深色可读。
+/* 三种入选理由。全部落在暖中性体系内：首选用墨色实底（最高权重，
+   与"以墨为主色"一致），另两种用极薄的语义雾底 + 深色文字。
    注意 [data-tone] 属性选择器特异性高于上方中性规则，因此必须同时显式声明
    background 与 color，否则会出现深底深字。 */
 .candidate-photo > .candidate-label[data-tone="primary"] {
-  background: rgba(226, 232, 245, .95);
-  color: #223a5e;
+  background: var(--ink);
+  color: #fff;
 }
 .candidate-photo > .candidate-label[data-tone="thrift"] {
-  background: rgba(222, 240, 232, .95);
-  color: #1c5942;
+  background: var(--sage-soft);
+  color: var(--sage);
 }
 .candidate-photo > .candidate-label[data-tone="comfort"] {
-  background: rgba(244, 234, 222, .95);
-  color: #6b482a;
+  background: var(--blue-mist);
+  color: var(--ink-2);
 }
 
-/* 事实 / 风险 / 无冲突 三类标签的语义色（中性主题下的最终取值） */
-.candidate-tags .tag-fact { background: #f0f0f2; color: var(--ink-2); }
-.candidate-tags .tag-caveat { background: #fbeaec; color: #8d2731; }
-.candidate-tags .tag-clear { background: #e6f4ee; color: #1c5942; }
+/* 事实 / 风险 / 无冲突 三类标签的语义色 */
+.candidate-tags .tag-fact { background: var(--soft); color: var(--ink-2); }
+.candidate-tags .tag-caveat { background: var(--danger-soft); color: var(--danger); }
+.candidate-tags .tag-clear { background: var(--sage-soft); color: var(--sage); }
 
 .tenant-avatar {
   background: #ededf0;
@@ -3911,7 +3922,7 @@ select:focus-visible {
 }
 
 .task-status-action.is-resume { border-color: #22231f; background: #22231f; color: #fff; }
-.task-readonly { padding: 9px 12px; border-radius: 12px; background: #f1f1ee; color: #999a96; }
+.task-readonly { padding: 9px 12px; border-radius: 12px; background: var(--blue-soft); color: var(--ink-3); }
 
 .task-center-notice,
 .task-center-loading,
@@ -4768,21 +4779,10 @@ body[data-motion="reduced"] *::after { scroll-behavior: auto !important; animati
  * Keep color for status semantics only; product surfaces stay warm white,
  * charcoal and soft gray so older blue-theme rules cannot leak through.
  */
-:root {
-  --ink: #171717;
-  --ink-2: #444440;
-  --ink-3: #7b7b76;
-  --line: #e5e5df;
-  --soft: #f4f4f1;
-  --blue: #171717;
-  --blue-deep: #171717;
-  --blue-soft: #f1f1ee;
-  --blue-mist: #e8e8e4;
-}
 
 html,
 body {
-  background: #efefec;
+  background: var(--page);
 }
 
 .device,
@@ -4799,6 +4799,31 @@ body {
   background: linear-gradient(180deg, #fff 0%, #fbfbf9 56%, #f6f6f3 100%);
 }
 
+/* 首页纵向分布：标题定顶，小熊吃掉中间的自由空间，输入区与出租入口贴近下沿。
+   原先内容按文档流全部堆在上方，底部留下约 300px 空洞，构图头重脚轻。 */
+.agent-home {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.agent-home > .home-title { flex: 0 0 auto; }
+
+.agent-home > .home-agent-card {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  min-height: 200px;
+  height: auto;
+}
+
+.agent-home > .home-composer { flex: 0 0 auto; }
+
+.agent-home > .home-supply-entry {
+  flex: 0 0 auto;
+  margin-top: 14px;
+}
+
 .connection-bar {
   border-color: #e8e8e3;
   background: rgba(247, 247, 244, .96);
@@ -4806,7 +4831,17 @@ body {
 }
 
 .connection-bar small {
-  color: #85857f;
+  color: var(--ink-3);
+}
+
+/* 连接正常时不占空间，也不发出任何视觉噪音。 */
+.connection-bar.is-quiet {
+  min-height: 0;
+  height: 0;
+  padding-block: 0;
+  border-block-width: 0;
+  overflow: hidden;
+  opacity: 0;
 }
 
 .flow-header,
@@ -4889,7 +4924,7 @@ body {
 }
 
 .agent-dialogue-row.is-supply > div {
-  background: #e8e8e4;
+  background: var(--blue-mist);
 }
 
 .agent-dialogue-row.is-both > div {
@@ -5049,7 +5084,7 @@ body {
 }
 
 .trend-bars i {
-  background: linear-gradient(180deg, #aaa9a3, #e5e5df);
+  background: linear-gradient(180deg, #a8a69d, var(--line));
 }
 
 .trend-bars span:last-child i {

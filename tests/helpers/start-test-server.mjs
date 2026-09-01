@@ -91,7 +91,14 @@ export async function startTestServer({ adminReviewToken = null } = {}) {
     app.worker.drain();
     const renterSnapshot = app.matching.snapshot(renterTask.id);
     const supplySnapshot = app.matching.snapshot(supplyTask.id);
-    const matchCaseId = renterSnapshot.candidates[0]?.matchCaseId;
+    // 必须用「这两个任务构成的案例」精确定位，不能取 candidates[0]：
+    // 测试文件共用一个服务端，先前用例的任务会与新任务互相匹配，
+    // 因此租客的第一个候选很可能属于另一个房源。
+    // 且候选排序按接收方视角各自计算，索引位置本身不是稳定契约。
+    const pairedCase = app.matching.matchCaseRepository
+      .listForTask(renterTask.id)
+      .find((item) => item.renterTaskId === renterTask.id && item.supplyTaskId === supplyTask.id);
+    const matchCaseId = pairedCase?.id;
     if (!matchCaseId) throw new Error("测试夹具未生成匹配案例");
     return { renterTask, supplyTask, renterSnapshot, supplySnapshot, matchCaseId };
   }

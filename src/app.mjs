@@ -92,10 +92,15 @@ const iconPaths = {
   contact: '<circle cx="9" cy="8" r="4"/><path d="M2.5 21a6.5 6.5 0 0 1 13 0M19 8v6M16 11h6"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1v.1h-4v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1-.4h-.1v-4H3A1.7 1.7 0 0 0 4.6 8.5a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1v-.1h4V3a1.7 1.7 0 0 0 1.1 1.6 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.13.36.34.7.6 1 .27.25.62.4 1 .4h.1v4H21a1.7 1.7 0 0 0-1.6.6Z"/>',
   archive: '<path d="M4 7h16v13H4zM3 3h18v4H3zM9 11h6"/>',
-  elysHome: '<circle cx="12" cy="12" r="5.4" fill="currentColor" stroke="none"/><circle cx="12" cy="5.3" r="2.65" fill="currentColor" stroke="none"/><circle cx="16.75" cy="7.25" r="2.65" fill="currentColor" stroke="none"/><circle cx="18.7" cy="12" r="2.65" fill="currentColor" stroke="none"/><circle cx="16.75" cy="16.75" r="2.65" fill="currentColor" stroke="none"/><circle cx="12" cy="18.7" r="2.65" fill="currentColor" stroke="none"/><circle cx="7.25" cy="16.75" r="2.65" fill="currentColor" stroke="none"/><circle cx="5.3" cy="12" r="2.65" fill="currentColor" stroke="none"/><circle cx="7.25" cy="7.25" r="2.65" fill="currentColor" stroke="none"/>',
-  elysBubble: '<path d="M5.1 4.8h13.8a2.7 2.7 0 0 1 2.7 2.7v7.1a2.7 2.7 0 0 1-2.7 2.7h-7.2l-4.5 3v-3H5.1a2.7 2.7 0 0 1-2.7-2.7V7.5a2.7 2.7 0 0 1 2.7-2.7Z" fill="currentColor" stroke="none"/>',
-  elysDiamond: '<rect x="4.7" y="4.7" width="14.6" height="14.6" rx="3.2" transform="rotate(45 12 12)" fill="currentColor" stroke="none"/>',
-  elysUser: '<circle cx="12" cy="7.1" r="4" fill="currentColor" stroke="none"/><path d="M4.6 20.7a7.4 7.4 0 0 1 14.8 0Z" fill="currentColor" stroke="none"/>'
+  // 导航图标统一为描边几何体，与 .icon 基类（fill:none / stroke-width:1.8）一致。
+  // 此前这几个图标用 fill=currentColor + stroke=none 覆盖基类，
+  // 既比其他图标视觉更重，也让 .tab-item[aria-current] 用 stroke-width: 2.5
+  // 表达选中态的机制彻底失效。
+  // 语义也修正了：对话气泡归"消息"，"候选"用卡片堆叠表示一组待选项。
+  elysHome: '<path d="M4.2 10.6 12 4.4l7.8 6.2v8.5a1.3 1.3 0 0 1-1.3 1.3H5.5a1.3 1.3 0 0 1-1.3-1.3Z"/><path d="M9.7 20.4v-5.3h4.6v5.3"/>',
+  elysStack: '<rect x="3.9" y="8.3" width="12.6" height="11.4" rx="2.3"/><path d="M7.3 8.3V6.7a2.3 2.3 0 0 1 2.3-2.3h8.1a2.3 2.3 0 0 1 2.3 2.3v9.1"/>',
+  elysBubble: '<path d="M20.5 11.9c0 3.8-3.8 6.9-8.5 6.9-1 0-2-.14-2.9-.41l-4.4 1.5 1.2-3.3a6.4 6.4 0 0 1-2.4-4.7c0-3.8 3.8-6.9 8.5-6.9s8.5 3.1 8.5 6.9Z"/>',
+  elysUser: '<circle cx="12" cy="8.2" r="3.7"/><path d="M5.3 20.3a6.7 6.7 0 0 1 13.4 0"/>'
 };
 
 function icon(name, className = "") {
@@ -491,8 +496,8 @@ function flowHeader(title) {
 function tabBar() {
   const tabs = [
     ["match", "elysHome", "首页"],
-    ["results", "elysBubble", "候选"],
-    ["messages", "elysDiamond", "消息"],
+    ["results", "elysStack", "候选"],
+    ["messages", "elysBubble", "消息"],
     ["profile", "elysUser", "我的"]
   ];
   return `<nav class="tab-dock" aria-label="主要导航">
@@ -902,7 +907,11 @@ function tenantCard(candidate, index) {
 
 function resultsScreen() {
   if (!state.task) return `<section class="plain-empty candidate-empty"><p>这里空空如也</p><span class="empty-create-hint"><svg class="empty-hint-arrow" viewBox="0 0 28 24" aria-hidden="true"><path d="M25 2C15 3 8 9 5 20"/><path d="m2 16 3 4 5-2"/></svg>点击这里新建任务</span></section>`;
-  const allCandidates = state.task.kind === "renter" ? state.result?.candidates || [] : state.supplyResult?.candidates || [];
+  const rawCandidates = state.task.kind === "renter" ? state.result?.candidates || [] : state.supplyResult?.candidates || [];
+  // 服务端返回全部候选（供深链解析与审计），但只有 delivered 的进入投放列表，
+  // 由此落实"每个接收方最多交付三条候选"。字段缺失时按可投放处理，
+  // 以兼容 demo 路径与旧快照。
+  const allCandidates = rawCandidates.filter((item) => item?.delivered !== false);
   const candidates = state.task.delivered ? allCandidates : allCandidates.slice(0, state.task.suitable);
   if (!state.task.delivered && !candidates.length) {
     const heading = state.task.kind === "renter" ? "正在找房" : "正在找租客";
@@ -1378,7 +1387,11 @@ function connectionBar() {
     ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Shanghai" }).format(new Date(lastSuccessAt))
     : "尚未连接";
   const detail = phase === "online" ? `最近同步 ${lastSuccess}` : message;
-  return `<aside class="connection-bar is-${phase}" data-connection-phase="${phase}" aria-label="服务连接状态"><span class="connection-dot" aria-hidden="true"></span><div><b>${labels[phase]}</b><small>${escapeText(detail)}</small></div>${phase === "offline" ? '<button data-action="retry-connection">重试</button>' : ""}</aside>`;
+  // 顺利路径不占据视觉空间：online 时整条塌缩为零高度。
+  // 元素保留在 DOM 中，data-connection-phase 仍可被查询与过渡，
+  // 状态恢复的播报由独立的 #app-live-region 负责，不依赖本条可见。
+  const quiet = phase === "online" ? " is-quiet" : "";
+  return `<aside class="connection-bar is-${phase}${quiet}" data-connection-phase="${phase}" aria-label="服务连接状态"><span class="connection-dot" aria-hidden="true"></span><div><b>${labels[phase]}</b><small>${escapeText(detail)}</small></div>${phase === "offline" ? '<button data-action="retry-connection">重试</button>' : ""}</aside>`;
 }
 
 function decorateFocusKeys() {
@@ -1500,7 +1513,9 @@ function render() {
   const demoBanner = state.demoBanner
     ? '<div class="demo-mode-banner" role="status">演示模式 · 当前候选包含测试语料</div>'
     : "";
-  app.innerHTML = `<div class="device"><div class="app-shell">${statusBar()}${demoBanner}${connectionBar()}<main id="app-main" class="screen-scroll ${immersive ? "immersive" : ""}" tabindex="-1">${content}</main>${immersive ? "" : tabBar()}${activeSheet()}${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}</div></div>`;
+  // 应用就绪状态挂在外壳上，与"是否渲染连接横幅"解耦：
+  // 连接正常时横幅会塌缩隐藏，自动化与无障碍不应依赖它的可见性来判断就绪。
+  app.innerHTML = `<div class="device"><div class="app-shell" data-app-connection="${state.connection.phase}">${statusBar()}${demoBanner}${connectionBar()}<main id="app-main" class="screen-scroll ${immersive ? "immersive" : ""}" tabindex="-1">${content}</main>${immersive ? "" : tabBar()}${activeSheet()}${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}</div></div>`;
   decorateFocusKeys();
   applyFieldErrorAttributes();
   prepareActiveDialog(focusKeyBeforeRender, sheetBeforeRender);

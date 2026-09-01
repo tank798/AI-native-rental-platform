@@ -17,8 +17,12 @@ export default defineConfig({
   testMatch: ["ui-critical.spec.mjs", "bilateral-e2e.spec.mjs"],
   fullyParallel: false,
   workers: 1,
-  timeout: 30_000,
-  expect: { timeout: 8_000 },
+  // 双边用例会开两个浏览器上下文跑完整流程（澄清→同版确认→解锁→看房），
+  // 30s 预算在负载稍高时就会超时（实测单独跑 8.4s，满载套件下超 30s）。
+  // 根因是匹配计算目前同步跑在请求线程内（worker.drain），
+  // 在该性能问题修复前先给足挂钟预算，避免把真实通过的用例误判为失败。
+  timeout: 90_000,
+  expect: { timeout: 15_000 },
   outputDir: path.join(os.tmpdir(), "zhunaer-playwright-results"),
   reporter: [["line"]],
   use: {

@@ -71,8 +71,16 @@ function keyOf(candidate, index) {
 }
 
 /**
- * 按不同维度依次挑选，保证交付的每一条都有各自的入选理由，而不是同一维度的前三名。
- * 候选不足时只标注实际选出的条数，不硬凑标签。
+ * 按不同维度依次挑选投放候选，保证交付的每一条都有各自的入选理由。
+ *
+ * 返回**全部**候选（按投放优先级排序），其中前 limit 条带 delivered: true
+ * 与差异化 selectionLabel，其余为 delivered: false。
+ *
+ * 为什么不直接截断：snapshot.candidates 同时承担两个职责 ——
+ * 结果页列表展示，以及深链 `?match=<caseId>` 的案例解析。
+ * 若在此截断，排在投放名额之外的案例就无法被解析，
+ * 用户打开一个真实有效、且正等自己确认的案例时会收到"该匹配结果已失效"。
+ * 因此这里只做排序与标注，"最多三条"由展示层依据 delivered 落实。
  */
 export function selectDeliveredCandidates(candidates, { kind = "renter", limit = MAX_DELIVERED_CANDIDATES } = {}) {
   const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
@@ -82,26 +90,31 @@ export function selectDeliveredCandidates(candidates, { kind = "renter", limit =
   const chosen = [];
   const taken = new Set();
 
+  const keyFor = (candidate) => keyOf(candidate, list.indexOf(candidate));
+
   for (const pick of picks.slice(0, limit)) {
-    const next = [...list]
-      .sort(pick.compare)
-      .find((candidate, index) => !taken.has(keyOf(candidate, index)));
+    const next = [...list].sort(pick.compare).find((candidate) => !taken.has(keyFor(candidate)));
     if (!next) break;
-    taken.add(keyOf(next, list.indexOf(next)));
-    chosen.push({ ...next, selectionLabel: pick.label });
+    taken.add(keyFor(next));
+    chosen.push({ ...next, selectionLabel: pick.label, delivered: true });
   }
 
-  // 维度用尽仍未达上限（候选很多但维度只有三个）时，按综合分补齐，标签留空，
-  // 避免出现语义重复的标签。
+  // 维度用尽仍未达上限时按综合分补齐，标签留空，避免语义重复的标签。
   if (chosen.length < limit) {
     for (const candidate of [...list].sort(byOverall)) {
       if (chosen.length >= limit) break;
-      const key = keyOf(candidate, list.indexOf(candidate));
+      const key = keyFor(candidate);
       if (taken.has(key)) continue;
       taken.add(key);
-      chosen.push({ ...candidate, selectionLabel: "" });
+      chosen.push({ ...candidate, selectionLabel: "", delivered: true });
     }
   }
 
-  return chosen;
+  // 其余候选保留在列表中（供深链解析与审计），但不计入投放名额。
+  const rest = [...list]
+    .sort(byOverall)
+    .filter((candidate) => !taken.has(keyFor(candidate)))
+    .map((candidate) => ({ ...candidate, delivered: false }));
+
+  return [...chosen, ...rest];
 }

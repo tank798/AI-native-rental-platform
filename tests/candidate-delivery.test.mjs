@@ -19,13 +19,16 @@ function renterCandidate(id, { score, rent, area, roommates = 1, status = "eligi
   };
 }
 
-test("最多只交付三条候选", () => {
+test("最多只投放三条候选（其余保留但标记为未投放）", () => {
   const many = Array.from({ length: 9 }, (_, index) => renterCandidate(`c${index}`, {
     score: 50 + index, rent: 3000 + index * 50, area: 10 + index
   }));
-  const delivered = selectDeliveredCandidates(many, { kind: "renter" });
+  const result = selectDeliveredCandidates(many, { kind: "renter" });
+  const delivered = result.filter((item) => item.delivered);
   assert.equal(delivered.length, MAX_DELIVERED_CANDIDATES);
   assert.equal(MAX_DELIVERED_CANDIDATES, 3);
+  // 完整列表必须保留：它同时承担深链 ?match=<caseId> 的案例解析
+  assert.equal(result.length, many.length);
 });
 
 test("三条候选覆盖三种不同的入选理由，且标签与 UI 着色约定一致", () => {
@@ -106,4 +109,33 @@ test("相同输入产生稳定顺序，便于前端 diff 与幂等校验", () =>
   const first = selectDeliveredCandidates(build(), { kind: "renter" }).map((item) => item.matchCaseId);
   const second = selectDeliveredCandidates(build(), { kind: "renter" }).map((item) => item.matchCaseId);
   assert.deepEqual(first, second);
+});
+
+test("投放名额之外的候选仍保留在列表中，避免深链解析失败", () => {
+  const many = Array.from({ length: 6 }, (_, index) => renterCandidate(`c${index}`, {
+    score: 90 - index * 5, rent: 3000 + index * 100, area: 20 - index
+  }));
+  const result = selectDeliveredCandidates(many, { kind: "renter" });
+
+  // 全部候选都要在，否则 ?match=<caseId> 会误报"该匹配结果已失效"
+  assert.equal(result.length, many.length);
+  assert.deepEqual(
+    new Set(result.map((item) => item.matchCaseId)),
+    new Set(many.map((item) => item.matchCaseId))
+  );
+
+  const delivered = result.filter((item) => item.delivered);
+  assert.equal(delivered.length, 3, "投放名额仍为三条");
+  assert.ok(result.slice(0, 3).every((item) => item.delivered === true), "投放候选排在最前");
+  assert.ok(result.slice(3).every((item) => item.delivered === false), "其余标记为未投放");
+  assert.ok(result.slice(3).every((item) => !item.selectionLabel), "未投放候选不应带入选理由");
+});
+
+test("候选数不超过上限时全部标记为已投放", () => {
+  const result = selectDeliveredCandidates([
+    renterCandidate("a", { score: 90, rent: 3000, area: 20 }),
+    renterCandidate("b", { score: 80, rent: 2800, area: 14 })
+  ], { kind: "renter" });
+  assert.equal(result.length, 2);
+  assert.ok(result.every((item) => item.delivered === true));
 });

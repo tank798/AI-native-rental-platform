@@ -53,7 +53,9 @@ test("用户修改 AI 预填后，发布请求使用用户最终确认值", asyn
   });
 
   await page.goto(testServer.baseURL);
-  await expect(page.locator('[data-connection-phase="online"]')).toBeVisible();
+  // 就绪判定使用外壳上的状态属性：连接正常时横幅会塌缩隐藏（简约设计），
+  // 不应把"应用已连接"耦合到某个可见横幅上。
+  await expect(page.locator("[data-app-connection]")).toHaveAttribute("data-app-connection", "online");
   await page.locator('[data-input="draft-text"]').fill("静安寺附近，预算3000到3200，9月3日入住，女生合租，租12个月");
   await page.locator('[data-action="home-intake"]').click();
   await expect(page.locator('[data-input="budget-max"]')).toHaveValue("3200");
@@ -105,11 +107,20 @@ test("两个会话生成同一案例，详情深链支持刷新和前进后退�
     const seeded = testServer.seedPair(renter.ownerId, supply.ownerId, {
       supply: { title: maliciousTitle, label: "恶意标题安全测试" }
     });
-    expect(seeded.renterSnapshot.candidates[0].matchCaseId)
-      .toBe(seeded.supplySnapshot.candidates[0].matchCaseId);
+    // 断言"双方看到同一个案例"，而不是"双方的第一个候选恰好相同"。
+    // 候选投放按接收方视角各自排序（租客看综合/价格/居住条件，
+    // 房东看出价/租期），因此索引对称是偶然前提，不能依赖。
+    // 且本文件共用一个测试服务端，先前用例 seed 的任务会与新任务互相匹配。
+    expect(seeded.renterSnapshot.candidates.map((item) => item.matchCaseId))
+      .toContain(seeded.matchCaseId);
+    expect(seeded.supplySnapshot.candidates.map((item) => item.matchCaseId))
+      .toContain(seeded.matchCaseId);
 
     await renter.page.goto(`${testServer.baseURL}/?task=${seeded.renterTask.id}`);
-    const candidateButton = renter.page.locator('[data-action="open-candidate"]');
+    // 按标题精确定位本用例的候选，不依赖它排在第几位。
+    const candidateButton = renter.page
+      .locator('[data-action="open-candidate"]')
+      .filter({ hasText: maliciousTitle });
     await expect(candidateButton).toContainText(maliciousTitle);
     await expect(renter.page.locator("#listing-pwn")).toHaveCount(0);
     expect(await renter.page.evaluate(() => window.__listingPwn)).toBeUndefined();
@@ -205,7 +216,9 @@ test("连接失败持续可见，重试成功后恢复且通过独立 live regio
 
 test("需求错误显示在字段旁并把焦点移到第一个无效字段", async ({ page }) => {
   await page.goto(testServer.baseURL);
-  await expect(page.locator('[data-connection-phase="online"]')).toBeVisible();
+  // 就绪判定使用外壳上的状态属性：连接正常时横幅会塌缩隐藏（简约设计），
+  // 不应把"应用已连接"耦合到某个可见横幅上。
+  await expect(page.locator("[data-app-connection]")).toHaveAttribute("data-app-connection", "online");
   await page.locator('[data-input="draft-text"]').fill("静安寺附近找房");
   await page.locator('[data-action="home-intake"]').click();
   await expect(page.locator('[data-action="review-mandate"]')).toBeVisible();

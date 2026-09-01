@@ -17,7 +17,9 @@ async function openAccount(browser, width = 430) {
   const context = await browser.newContext({ viewport: { width, height: 900 } });
   const page = await context.newPage();
   await page.goto(testServer.baseURL);
-  await expect(page.locator('[data-connection-phase="online"]')).toBeVisible();
+  // 就绪判定使用外壳上的状态属性：连接正常时横幅会塌缩隐藏（简约设计），
+  // 不应把"应用已连接"耦合到某个可见横幅上。
+  await expect(page.locator("[data-app-connection]")).toHaveAttribute("data-app-connection", "online");
   return { context, page, ownerId: await currentOwnerId(page) };
 }
 
