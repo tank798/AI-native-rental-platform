@@ -17,9 +17,11 @@ import process from "node:process";
 const BASE = process.argv[2] || process.env.SHOWCASE_BASE_URL || "http://127.0.0.1:4173";
 const OUT = path.resolve("output/playwright");
 const EXECUTABLE = process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined;
+const ADMIN_REVIEW_TOKEN = process.env.SHOWCASE_ADMIN_REVIEW_TOKEN || "readme-showcase-only";
+const EVIDENCE_FIXTURE = path.resolve("assets/room-sunlit.jpg");
 
 const RENTER_TEXT = "静安寺附近，预算 3000 到 3500，9 月 3 日入住，女生合租，租 12 个月，通勤 35 分钟，需要厨房和洗衣机";
-const SUPPLY_TEXT = "当前租客个人转租，静安寺站，月租 3200 元，最低 3000 元，9 月 3 日入住，15 平，9/18 层，2 位女生室友，有洗衣机和电梯，朝南，无中介费无服务费";
+const SUPPLY_TEXT = "当前租客个人转租，完整地址上海市静安区南阳路 100 号，静安寺站，月租 3200 元，最低 3000 元，9 月 3 日入住，至少租 12 个月，15 平，9/18 层，2 位女生室友，有洗衣机和电梯，朝南，无中介费无服务费";
 
 async function main() {
   const { chromium } = await import("playwright");
@@ -74,13 +76,14 @@ async function main() {
     await box.check().catch(() => {});
   }
   await clickIfPresent('[data-action="publish-mandate"]');
-  // 04 要的是"正在持续匹配"的中间态，必须在候选到达之前抓
-  await page.waitForTimeout(900);
-  await shot("04-continuous-matching");
-
-  // 05 要的是候选已投放的结果页，等卡片真正出现再抓
+  // 服务端会直接返回首轮结果，不伪造一段进度动画。先等真实候选到达，
+  // 再回首页拍摄仍在运行的任务状态。
   await page.locator('[data-action="open-candidate"]').first()
-    .waitFor({ state: "visible", timeout: 30_000 }).catch(() => {});
+    .waitFor({ state: "visible", timeout: 30_000 });
+  await page.locator('[data-action="switch-tab"][data-value="match"]').click();
+  await page.locator(".agent-status").filter({ hasText: "仍在持续找房" }).waitFor({ state: "visible", timeout: 10_000 });
+  await shot("04-continuous-matching");
+  await page.locator('[data-action="switch-tab"][data-value="results"]').click();
   await page.waitForTimeout(800);
   await shot("05-renter-results");
 
@@ -120,6 +123,10 @@ async function main() {
     await supplyIntake.catch(() => {});
     await page.locator('[data-action="scan-supply"]').first()
       .waitFor({ state: "visible", timeout: 30_000 }).catch(() => {});
+    // 地址与租期是发布硬条件。模型若没有稳定抽出，截图脚本显式补齐，
+    // 避免把模型解析波动误当成界面流程成功。
+    await page.locator('[data-input="supply-address"]').fill("上海市静安区南阳路 100 号");
+    await page.locator('[data-input="supply-lease"]').selectOption("12");
     await page.waitForTimeout(900);
     await shot("08-supply-ai-intake");
     await page.evaluate(() => {
@@ -128,13 +135,40 @@ async function main() {
     });
     await page.waitForTimeout(800);
     await shot("09-supply-details");
-  }
 
-  // 出租端候选与数据页
-  await page.goto(BASE, { waitUntil: "networkidle" });
-  await page.waitForTimeout(1200);
-  if (await clickIfPresent('[data-action="open-task-center"]')) await page.waitForTimeout(900);
-  await shot("11-supply-tenant-results");
+    // 出租任务必须走完真实的上传和人工核验门槛。四份文件只使用仓库内的
+    // 测试图片；审核令牌也只供本地截图服务使用。
+    for (const kind of ["identity", "roleDocument", "rightsDocument", "livePhotoChallenge"]) {
+      const upload = page.waitForResponse(
+        (r) => r.url().includes("/api/evidence") && r.request().method() === "POST",
+        { timeout: 30_000 }
+      );
+      await page.locator(`#evidence-${kind}`).setInputFiles(EVIDENCE_FIXTURE);
+      const uploadResponse = await upload;
+      const evidence = await uploadResponse.json();
+      const review = await page.evaluate(async ({ evidenceId, token }) => {
+        const response = await fetch(`/api/admin/evidence/${encodeURIComponent(evidenceId)}/review`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Admin-Review-Token": token
+          },
+          body: JSON.stringify({ reviewer: "readme-showcase", result: "approved" })
+        });
+        return { ok: response.ok, status: response.status, body: await response.text() };
+      }, { evidenceId: evidence.id, token: ADMIN_REVIEW_TOKEN });
+      if (!review.ok) throw new Error(`演示材料审核失败（${kind}, HTTP ${review.status}）：${review.body}`);
+    }
+
+    await page.locator('[data-action="scan-supply"]').click();
+    await page.locator('[data-action="publish-supply"]').waitFor({ state: "visible", timeout: 10_000 });
+    await page.locator('[data-action="toggle-supply-pledge"]').check();
+    await page.locator('[data-action="publish-supply"]').click();
+    await page.locator(".tenant-card").first().waitFor({ state: "visible", timeout: 30_000 });
+    await page.waitForTimeout(800);
+    await shot("11-supply-tenant-results");
+  }
 
   await page.goto(BASE, { waitUntil: "networkidle" });
   await page.waitForTimeout(800);
