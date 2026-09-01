@@ -651,6 +651,23 @@ npm run smoke:bilateral
 
 成功时 7 个布尔护栏全部为 `true`，`privateLeakCount` 和 `seedCandidateCount` 都为 0。完整发布步骤、故障演练与人工验收见 [受控试点运行手册](./docs/pilot-runbook.md)，安全门槛见 [安全与隐私检查清单](./docs/security-checklist.md)。
 
+#### 更新 README 里的界面截图
+
+README 的界面展示图是仓库首页的门面，**界面改动后必须一起更新**，
+否则首页展示的是旧 UI。生成方式：
+
+```bash
+# 终端 A
+MARKET_MODE=demo PORT=4173 npm start
+
+# 终端 B
+node scripts/capture-showcase.mjs
+```
+
+脚本会在结束时自检"不同名字的图是否内容相同"。若报告重复，
+说明某处等待时机或滚动没生效（例如误用 `window.scrollBy`，
+而真正的滚动容器是 `#app-main`），需要修正后重跑而不是直接提交。
+
 #### 在受限网络里运行浏览器测试
 
 Playwright 默认需要下载自带的 Chromium。内网或代理环境下如果下载不动，
@@ -733,7 +750,7 @@ npm run eval:ai
 │   ├── marketplace-corpus.mjs      # 双边测试市场
 │   └── simulation-engine.mjs       # 匹配、议价和风控规则
 ├── tests/                          # 自动化测试
-├── scripts/                        # 双边 smoke 与聚合指标脚本
+├── scripts/                        # 双边 smoke、聚合指标与展示截图脚本
 ├── playwright.config.mjs           # 隔离浏览器回归配置
 ├── .env.example                    # 无密钥的配置模板
 ├── index.html                      # Web 入口
