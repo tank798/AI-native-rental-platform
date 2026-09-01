@@ -13,7 +13,8 @@ export const migrations = Object.freeze([
   { version: 6, name: "contact-grant-snapshots", sqlFile: "006-contact-grant-snapshots.sql" },
   { version: 7, name: "listing-media-metadata", sqlFile: "007-listing-media-metadata.sql" },
   { version: 8, name: "transactional-matching-worker", sqlFile: "008-transactional-matching-worker.sql" },
-  { version: 9, name: "product-lifecycle", sqlFile: "009-product-lifecycle.sql" }
+  { version: 9, name: "product-lifecycle", sqlFile: "009-product-lifecycle.sql" },
+  { version: 10, name: "soft-delete-tasks", sqlFile: "010-soft-delete-tasks.sql" }
 ].map(Object.freeze));
 
 export const latestSchemaVersion = migrations.at(-1).version;

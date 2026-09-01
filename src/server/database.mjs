@@ -135,12 +135,12 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       INSERT INTO tasks(id, owner_id, kind, status, label, payload_json, input_version, client_request_id, created_at, updated_at, expires_at)
       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
     `),
-    taskById: db.prepare("SELECT * FROM tasks WHERE id = ?"),
-    taskByClientRequest: db.prepare("SELECT * FROM tasks WHERE owner_id = ? AND client_request_id = ?"),
-    tasksByOwner: db.prepare("SELECT * FROM tasks WHERE owner_id = ? ORDER BY created_at DESC"),
-    activeTasksByKind: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? ORDER BY created_at ASC"),
-    activeOppositeTasks: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? AND owner_id <> ? ORDER BY created_at ASC"),
-    expiringTasks: db.prepare("SELECT * FROM tasks WHERE status = 'active' AND expires_at <= ?"),
+    taskById: db.prepare("SELECT * FROM tasks WHERE id = ? AND deleted_at IS NULL"),
+    taskByClientRequest: db.prepare("SELECT * FROM tasks WHERE owner_id = ? AND client_request_id = ? AND deleted_at IS NULL"),
+    tasksByOwner: db.prepare("SELECT * FROM tasks WHERE owner_id = ? AND deleted_at IS NULL ORDER BY created_at DESC"),
+    activeTasksByKind: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? AND deleted_at IS NULL ORDER BY created_at ASC"),
+    activeOppositeTasks: db.prepare("SELECT * FROM tasks WHERE kind = ? AND status = 'active' AND expires_at > ? AND owner_id <> ? AND deleted_at IS NULL ORDER BY created_at ASC"),
+    expiringTasks: db.prepare("SELECT * FROM tasks WHERE status = 'active' AND expires_at <= ? AND deleted_at IS NULL"),
     markTaskExpired: db.prepare(`
       UPDATE tasks SET status = 'expired', payload_json = ?, input_version = ?, updated_at = ?
       WHERE id = ? AND status = 'active' AND input_version = ?
@@ -161,7 +161,19 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       WHERE id = ? AND owner_id = ? AND input_version = ? AND lifecycle_version = ?
         AND status IN ('active', 'paused')
     `),
-    deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND owner_id = ?"),
+    // 软删除：保留行与外键关系，以免级联销毁 match_cases / reports / 审计链。
+    // 同时清空 payload_json（业务载荷）以满足用户的数据删除诉求。
+    softDeleteTask: db.prepare(`
+      UPDATE tasks
+      SET deleted_at = ?, status = 'closed', payload_json = ?, updated_at = ?
+      WHERE id = ? AND owner_id = ? AND deleted_at IS NULL
+    `),
+    countReportsForTask: db.prepare(`
+      SELECT COUNT(*) AS total FROM reports
+      WHERE match_case_id IN (
+        SELECT id FROM match_cases WHERE renter_task_id = ? OR supply_task_id = ?
+      )
+    `),
     candidatesByTask: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? ORDER BY created_at ASC"),
     candidateByPair: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? AND counterparty_id = ?"),
     insertCandidate: db.prepare(`
@@ -469,8 +481,20 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       });
     },
 
+    /**
+     * 软删除任务。不能用物理删除：tasks 上挂着 match_cases 的
+     * ON DELETE CASCADE，而 reports 又级联在 match_cases 上，
+     * 物理删除会让被举报方自行销毁举报与审计证据。
+     */
     deleteTask(id, ownerId) {
-      return statements.deleteTask.run(id, ownerId).changes > 0;
+      const at = now();
+      const redacted = JSON.stringify({ redacted: true, redactedAt: at });
+      return statements.softDeleteTask.run(at, redacted, at, id, ownerId).changes > 0;
+    },
+
+    /** 该任务参与的案例上是否存在举报记录（用于审计与回归测试）。 */
+    countReportsForTask(taskId) {
+      return Number(statements.countReportsForTask.get(taskId, taskId)?.total || 0);
     },
 
     replaceCandidates(taskId, candidates, scanned) {
