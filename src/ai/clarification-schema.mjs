@@ -12,7 +12,7 @@ export function answerSpecForUnknown(unknown) {
   if (key === "listing.fees.utilities") {
     return { expectedAnswerType: "enum", options: ["included", "actual_bill", "fixed_extra", "unknown"] };
   }
-  if (/^(?:budget\.hardMax|listing\.rent|listing\.leaseMonthsMin|leaseMonths|commute\.routeMinutes)$/u.test(key)) {
+  if (/^(?:budget\.hardMax|listing\.rent|listing\.concessionRent|listing\.leaseMonthsMin|leaseMonths|commute\.routeMinutes)$/u.test(key)) {
     return { expectedAnswerType: "number", minimum: 1, maximum: key.includes("Rent") || key.includes("budget") || key.includes("rent") ? 100_000 : 120 };
   }
   if (/^(?:listing\.availableFrom|moveInWindow)$/u.test(key)) {

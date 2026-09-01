@@ -378,6 +378,9 @@ export const demoSupplyDraft = {
   title: "静安寺 8 分钟，朝南次卧个人转租",
   listedRent: 3200,
   minimumAuthorizedRent: 3000,
+  // 房东自主给出的让价（不低于 minimumAuthorizedRent）。对外提案价只能取
+  // listedRent 或本字段，永不由租客的私密上限推导。
+  concessionRent: 3050,
   availableFrom: "2026-09-03",
   leaseEnd: "2027-08-31",
   leaseMonthsMin: 12,

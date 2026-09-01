@@ -1,6 +1,6 @@
 import { compareIsoDates } from "../clock.mjs";
 
-export const PAIR_EVALUATOR_VERSION = "rules-0.7.0";
+export const PAIR_EVALUATOR_VERSION = "rules-0.8.0";
 
 function normalizePlace(value) {
   return String(value || "")
@@ -212,11 +212,35 @@ export function evaluateTaskPair({
   if (prohibitedFees.some((key) => Number(draft.fees?.[key] || 0) > 0)) conflict("PROHIBITED_FEE", "房源存在禁止费用", "one or more prohibited fees are positive");
   if (!verificationReady(draft)) conflict("SUPPLY_NOT_VERIFIED", "房源发布资格不可用", "one or more verification facts are not verified");
 
-  const proposedRent = hardMax !== null && minimumRent !== null && listedRent !== null && hardMax >= minimumRent
-    ? Math.max(minimumRent, Math.min(listedRent, hardMax))
-    : null;
+  // 隐私不变量（P0）：任何对外披露的价格都必须由该数字的所有者本人给出。
+  // 租客的 budget.hardMax 是私密上限；一旦把它当作对外提案价，房东只要看到
+  // 提案价低于自己的挂牌价，就能反推出租客的确切心理上限。因此这里只允许两种
+  // 来源作为提案价：房东自己的公开挂牌价 listedRent，或房东自主给出的让价 concessionRent。
+  const concessionRentRaw = numberOrNull(draft.concessionRent);
+  // 房东的让价不得低于自己的授权底价（防止前端传入越界值）。
+  const concessionRent = concessionRentRaw === null || minimumRent === null
+    ? concessionRentRaw
+    : Math.max(concessionRentRaw, minimumRent);
+  let proposedRent = null;
+  if (hardMax !== null && minimumRent !== null && listedRent !== null && hardMax >= minimumRent) {
+    if (hardMax >= listedRent) {
+      // 租客可承受挂牌价：直接以房东自己的公开价成交，零泄露。
+      proposedRent = listedRent;
+    } else if (concessionRent === null) {
+      // 需要房东自主决定是否让价。只告知「租客希望议价」这一事实，
+      // 不披露租客上限的任何精确数值。
+      unknown("listing.concessionRent", "supply", "RENT_CONCESSION_REQUIRED", "租客希望在挂牌价基础上议价，待确认可接受价格");
+    } else if (concessionRent <= hardMax) {
+      // 房东的让价落在租客授权范围内：用房东自己的数字成交，零泄露。
+      proposedRent = concessionRent;
+    } else {
+      // 让价仍高于租客上限。只回传「仍偏高」，不回传差额，避免二分逼近出确切上限。
+      unknown("listing.concessionRent", "supply", "RENT_CONCESSION_REQUIRED", "当前让价仍高于租客可接受范围，待确认是否继续下调");
+    }
+  }
   const utilities = draft.fees?.utilities;
-  if ((utilities === null || utilities === undefined || utilities === "" || utilities === "unknown") && proposedRent !== null && hardMax - proposedRent < 300) {
+  if ((utilities === null || utilities === undefined || utilities === "" || utilities === "unknown")
+    && proposedRent !== null && hardMax !== null && hardMax - proposedRent < 300) {
     unknown("listing.fees.utilities", "supply", "TOTAL_COST_BLOCKING_UNKNOWN", "水电费用待确认");
   }
 

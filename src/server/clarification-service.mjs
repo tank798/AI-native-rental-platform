@@ -35,6 +35,7 @@ function templateQuestion(unknown) {
     "listing.fees.utilities": "水电燃气费是包含在月租中，还是按账单另付？",
     "budget.hardMax": "你能接受的月租上限是多少？",
     "listing.rent": "请确认这套房源的月租。",
+    "listing.concessionRent": "有租客希望在挂牌价基础上议价。你可以接受的月租是多少？",
     leaseMonths: "你计划租住几个月？",
     "listing.leaseMonthsMin": "这套房源最短需要租几个月？",
     moveInWindow: "你可以在哪个日期范围内入住？",
