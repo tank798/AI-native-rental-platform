@@ -22,6 +22,9 @@ async function request(baseUrl, route, { cookie, method = "GET", body } = {}) {
     method,
     headers: {
       "Content-Type": "application/json",
+      // 写操作必须携带可校验的同源来源（参见 assertSameOrigin），
+      // 真实浏览器对非 GET 请求必定发送 Origin，这里如实模拟。
+      Origin: baseUrl,
       ...(cookie ? { Cookie: cookie } : {})
     },
     body: body === undefined ? undefined : JSON.stringify(body)

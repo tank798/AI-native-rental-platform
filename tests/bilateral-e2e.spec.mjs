@@ -154,6 +154,17 @@ test("两个真实账号从空市场完成澄清、同版确认、解锁并在�
 
     await supply.page.locator('[data-action="open-candidate"]').click();
     await expect(supply.page.getByRole("heading", { name: "需要你补充信息" })).toBeVisible();
+
+    // 租客可接受上限（3100）低于挂牌价（3200），因此系统不会直接拿租客的
+    // 私密上限当成交价，而是先请房东自主给出一个可接受的月租。
+    // 房东给 3050（低于租客上限），因此成交价取房东自己的数字，
+    // 房东无法从中反推出租客的确切上限。
+    const concessionAsk = supply.page.getByRole("spinbutton", { name: /议价/u });
+    await expect(concessionAsk).toBeVisible();
+    await concessionAsk.fill("3050");
+    await supply.page.getByRole("button", { name: "提交" }).click();
+
+    await expect(supply.page.getByRole("button", { name: "是" })).toBeVisible();
     await supply.page.getByRole("button", { name: "是" }).click();
     await expect(supply.page.getByRole("button", { name: "按账单另付" })).toBeVisible();
     await supply.page.getByRole("button", { name: "按账单另付" }).click();
