@@ -984,6 +984,10 @@ button { cursor: pointer; }
   font-weight: 620;
 }
 
+/* 头像对齐方式取决于气泡是"一句话"还是"一张卡"：
+   短气泡底对齐，读起来像说话的尾巴；
+   高卡片必须顶对齐，否则头像会掉到卡片底部、与说话人错位。
+   摘要卡已与表单卡同宽同类，因此两者一并顶对齐。 */
 .chat-line.is-form {
   align-items: flex-start;
 }
