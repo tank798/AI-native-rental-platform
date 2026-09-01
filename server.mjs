@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import http from "node:http";
@@ -93,6 +93,16 @@ function securityHeaders() {
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(self), geolocation=(), microphone=()"
   };
+}
+
+/**
+ * 定长比较，避免通过响应时间差逐字符猜测审核令牌。
+ * 先比长度会泄露长度信息，因此统一哈希到 32 字节再比。
+ */
+function timingSafeEqualString(left, right) {
+  const a = createHash("sha256").update(String(left)).digest();
+  const b = createHash("sha256").update(String(right)).digest();
+  return timingSafeEqual(a, b);
 }
 
 function sha256(value) {
@@ -283,6 +293,9 @@ export function createRentalServer(options = {}) {
   const aiModel = options.aiModel ?? environment.SILICONFLOW_MODEL ?? undefined;
   // 供应商变慢时应当能靠配置调整，而不是改代码重新发版。
   const aiTimeoutMs = Number(options.aiTimeoutMs ?? environment.SILICONFLOW_TIMEOUT_MS) || undefined;
+  // 人工核验令牌。未配置时核验端点整体不存在（返回 404），
+  // 确保默认部署不会暴露一个可改变核验事实的入口。
+  const adminReviewToken = String(options.adminReviewToken ?? environment.ADMIN_REVIEW_TOKEN ?? "").trim();
   const contactEncryptionKey = options.contactEncryptionKey ?? environment.CONTACT_ENCRYPTION_KEY ?? null;
   const enableScheduler = options.enableScheduler ?? true;
   const schedulerMs = options.schedulerMs ?? 10_000;
@@ -408,6 +421,13 @@ export function createRentalServer(options = {}) {
     ]);
   }
 
+  // 核验端点不依赖会话，因此只能按 IP 限流，防止对令牌做暴力尝试。
+  function enforceReviewLimit(request) {
+    enforceRateLimit([
+      rateRule("review:ip:minute", requestIp(request), rateLimitPolicy.writeIpMinute)
+    ]);
+  }
+
   function enforceAiLimit(request, session) {
     const result = rateLimiter.consume([
       rateRule("ai:global:day", "all", rateLimitPolicy.aiGlobalDay),
@@ -526,6 +546,49 @@ export function createRentalServer(options = {}) {
   }
 
   async function handleApi(request, response, url) {
+    // 人工核验入口。必须在会话鉴权之前处理：审核方不是普通用户，
+    // 且绝不能让用户凭自己的会话审核自己的材料（那样核验就形同虚设）。
+    // 未配置 ADMIN_REVIEW_TOKEN 时该端点整体不存在，避免默认部署被利用。
+    const evidenceReviewRoute = url.pathname.match(/^\/api\/admin\/evidence\/([^/]+)\/review$/);
+    if (request.method === "POST" && evidenceReviewRoute) {
+      assertSameOrigin(request);
+      if (!adminReviewToken) {
+        return json(response, 404, { error: "API 不存在", code: "API_NOT_FOUND" });
+      }
+      enforceReviewLimit(request);
+      const presented = String(request.headers["x-admin-review-token"] || "");
+      if (!timingSafeEqualString(presented, adminReviewToken)) {
+        return json(response, 403, { error: "无审核权限", code: "REVIEW_FORBIDDEN" });
+      }
+      const body = await readJson(request);
+      const reviewer = String(body.reviewer || "").trim();
+      const result = String(body.result || "");
+      if (!reviewer) throw httpError(422, "REVIEWER_REQUIRED", "必须记录审核人");
+      if (!["approved", "rejected"].includes(result)) {
+        throw httpError(422, "REVIEW_RESULT_INVALID", "审核结果必须是 approved 或 rejected");
+      }
+      const evidenceId = decodeURIComponent(evidenceReviewRoute[1]);
+      let status;
+      try {
+        status = verification.reviewEvidence({ evidenceId, reviewer, method: "manual_review", result });
+      } catch (error) {
+        throw httpError(404, "EVIDENCE_NOT_FOUND", error.message || "待审核材料不存在");
+      }
+      // actor_owner_id 有外键约束到 profiles(id)，而审核方不是平台用户，
+      // 因此置 null，审核人身份记入 payload 供审计追溯。
+      // dedupeKey 需保证同一材料的多次审核都能落库（时钟在测试中被固定，
+      // 仅用时间戳会撞唯一约束），故additionally 附加随机后缀。
+      events.record({
+        type: "evidence.reviewed",
+        aggregateId: evidenceId,
+        actorOwnerId: null,
+        payload: { result, reviewer },
+        dedupeKey: `evidence-review:${evidenceId}:${randomUUID()}`,
+        createdAt: clock.nowIso()
+      });
+      return json(response, 200, { evidenceId, status });
+    }
+
     if (request.method === "GET" && url.pathname === "/api/health") {
       const workerHealth = worker.health();
       const ok = workerHealth.failed === 0;

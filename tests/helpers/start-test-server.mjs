@@ -28,7 +28,7 @@ function createPersistedTask(app, { ownerId, kind, label, payload, status = "act
 }
 
 /** Starts an isolated app that cannot read the project's database, uploads, or AI key file. */
-export async function startTestServer() {
+export async function startTestServer({ adminReviewToken = null } = {}) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "zhunaer-ui-"));
   const clock = createClock({ now: () => new Date(FIXED_NOW) });
   const app = createRentalServer({
@@ -39,6 +39,7 @@ export async function startTestServer() {
     aiApiKey: null,
     aiKeyFile: null,
     environment: {},
+    ...(adminReviewToken ? { adminReviewToken } : {}),
     clock,
     contactEncryptionKey: testContactEncryptionKey()
   });

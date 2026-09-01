@@ -31,7 +31,10 @@ const EVENT_SCHEMAS = Object.freeze({
   "viewing.accepted": ["scheduledAt", "party"],
   "viewing.rejected": ["scheduledAt", "party"],
   "viewing.cancelled": ["reason"],
-  "report.created": ["reasonCode"]
+  "report.created": ["reasonCode"],
+  // 人工核验结果。只记录 approved/rejected，不得写入材料内容、
+  // 文件名或审核备注，以免隐私信息进入可导出的事件流。
+  "evidence.reviewed": ["result", "reviewer"]
 });
 
 function assertPublicPayload(value, path = "payload") {
