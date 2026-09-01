@@ -2,7 +2,25 @@ import fs from "node:fs/promises";
 
 const DEFAULT_BASE_URL = "https://api.siliconflow.cn/v1";
 const DEFAULT_MODEL = "Qwen/Qwen3.5-35B-A3B";
-const DEFAULT_TIMEOUT_MS = 20_000;
+// 20s 对单次结构化就已经偏紧（实测单租客 runtime 解析也会超时），
+// 批量场景更是必然失败。这里提高基础值，并允许按 maxTokens 动态放大。
+const DEFAULT_TIMEOUT_MS = 45_000;
+// 输出越长所需时间越长：每 1000 tokens 预留的额外预算。
+const TIMEOUT_MS_PER_1K_TOKENS = 9_000;
+const MAX_TIMEOUT_MS = 180_000;
+
+/** 把 DOMException / Error 上各种形态的失败归一到可读的错误码。 */
+function normalizeErrorCode(error) {
+  if (!error) return "AI_PROVIDER_ERROR";
+  // TimeoutError / AbortError 是 DOMException，其 .code 是数字（如 23），
+  // 直接写入指标会得到无语义的 error_code: 23，破坏告警与成本归因。
+  if (error.name === "TimeoutError") return "TIMEOUT";
+  if (error.name === "AbortError") return "ABORTED";
+  if (typeof error.code === "string" && error.code) return error.code;
+  if (error.status) return `HTTP_${error.status}`;
+  if (error instanceof TypeError) return "NETWORK_ERROR";
+  return "AI_PROVIDER_ERROR";
+}
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
 function wait(ms) {
@@ -105,11 +123,19 @@ export class SiliconFlowClient {
     return { model: this.model, availableModels: models.length };
   }
 
+  /** 根据本次请求的 maxTokens 推导实际超时，避免长输出被固定值误杀。 */
+  timeoutFor(maxTokens) {
+    const budget = this.timeoutMs + (Number(maxTokens) || 0) / 1000 * TIMEOUT_MS_PER_1K_TOKENS;
+    return Math.min(MAX_TIMEOUT_MS, Math.round(budget));
+  }
+
   async json({ stage, system, user, temperature = 0.1, maxTokens = 4096, retries = 2 }) {
     const startedAt = Date.now();
     let lastError;
     let repairJson = false;
-    const maxAttempts = Math.min(2, Math.max(1, Number(retries) || 2));
+    // 旧实现为 Math.min(2, ...)，使签名上的 retries 形同虚设：传 5 仍只试 2 次。
+    const maxAttempts = Math.max(1, Math.min(5, Number(retries) || 2));
+    const timeoutMs = this.timeoutFor(maxTokens);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
@@ -137,7 +163,7 @@ export class SiliconFlowClient {
             max_tokens: maxTokens,
             stream: false
           }),
-          signal: AbortSignal.timeout(this.timeoutMs)
+          signal: AbortSignal.timeout(timeoutMs)
         });
 
         const raw = await response.text();
@@ -190,7 +216,7 @@ export class SiliconFlowClient {
       model: this.model,
       status: "error",
       schema_success: lastError?.code !== "MODEL_INVALID_JSON",
-      error_code: lastError?.code || (lastError?.status ? `HTTP_${lastError.status}` : "AI_PROVIDER_ERROR"),
+      error_code: normalizeErrorCode(lastError),
       latency_ms: Date.now() - startedAt,
       usage: null,
       trace_id: null

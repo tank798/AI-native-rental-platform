@@ -281,6 +281,8 @@ export function createRentalServer(options = {}) {
   const aiApiKey = options.aiApiKey ?? environment.SILICONFLOW_API_KEY ?? null;
   const aiKeyFile = options.aiKeyFile ?? environment.SILICONFLOW_API_KEY_FILE ?? null;
   const aiModel = options.aiModel ?? environment.SILICONFLOW_MODEL ?? undefined;
+  // 供应商变慢时应当能靠配置调整，而不是改代码重新发版。
+  const aiTimeoutMs = Number(options.aiTimeoutMs ?? environment.SILICONFLOW_TIMEOUT_MS) || undefined;
   const contactEncryptionKey = options.contactEncryptionKey ?? environment.CONTACT_ENCRYPTION_KEY ?? null;
   const enableScheduler = options.enableScheduler ?? true;
   const schedulerMs = options.schedulerMs ?? 10_000;
@@ -336,6 +338,7 @@ export function createRentalServer(options = {}) {
     apiKey: aiApiKey,
     keyFile: aiKeyFile,
     model: aiModel,
+    timeoutMs: aiTimeoutMs,
     clientOptions: options.aiClientOptions || {}
   });
   let scheduler = null;

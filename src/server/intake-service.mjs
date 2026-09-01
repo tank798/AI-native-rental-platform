@@ -168,6 +168,7 @@ export function createIntakeService({
   apiKey = null,
   keyFile = null,
   model = siliconFlowDefaults.model,
+  timeoutMs = undefined,
   clientOptions = {}
 } = {}) {
   let clientPromise = null;
@@ -177,7 +178,12 @@ export function createIntakeService({
     if (!clientPromise) {
       clientPromise = (async () => {
         const resolvedKey = apiKey || await readApiKey(keyFile);
-        return new SiliconFlowClient({ apiKey: resolvedKey, model, ...clientOptions });
+        return new SiliconFlowClient({
+          apiKey: resolvedKey,
+          model,
+          ...(timeoutMs ? { timeoutMs } : {}),
+          ...clientOptions
+        });
       })();
     }
     return clientPromise;
