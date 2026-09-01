@@ -24,6 +24,7 @@ export function createContactGrantService({
   database,
   matchCaseRepository,
   contactService,
+  eventService = null,
   clock = createClock(),
   ttlMs = DEFAULT_GRANT_TTL_MS
 }) {
@@ -101,6 +102,13 @@ export function createContactGrantService({
           safeJson({ grantId: active.id, reason, termsVersion: Number(active.terms_version) }),
           at
         );
+        eventService?.record({
+          type: "contact.revoked",
+          aggregateId: matchCaseId,
+          payload: { reason, termsVersion: Number(active.terms_version) },
+          dedupeKey: `contact-revoked:${active.id}`,
+          createdAt: at
+        });
       }
       return changed;
     });
@@ -164,6 +172,13 @@ export function createContactGrantService({
         safeJson({ grantId: id, termsVersion: matchCase.terms.version, expiresAt }),
         at
       );
+      eventService?.record({
+        type: "contact.unlocked",
+        aggregateId: matchCaseId,
+        payload: { termsVersion: matchCase.terms.version },
+        dedupeKey: `contact-unlocked:${id}`,
+        createdAt: at
+      });
       return { id, idempotent: false, expiresAt };
     });
   }
@@ -199,6 +214,14 @@ export function createContactGrantService({
       safeJson({ grantId: grant.id, viewerParty: owner.party, termsVersion: Number(grant.terms_version) }),
       at
     );
+    eventService?.record({
+      type: "contact.viewed",
+      aggregateId: matchCaseId,
+      actorOwnerId: ownerId,
+      payload: { party: owner.party, termsVersion: Number(grant.terms_version) },
+      dedupeKey: `contact-viewed:${grant.id}:${ownerId}`,
+      createdAt: at
+    });
     return { contact, grantExpiresAt: grant.expires_at };
   }
 

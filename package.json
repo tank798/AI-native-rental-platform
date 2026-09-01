@@ -14,7 +14,8 @@
     "eval:ai": "node --env-file-if-exists=.env.local evals/run-qwen-eval.mjs",
     "eval:clarification": "node --env-file-if-exists=.env.local evals/run-clarification-smoke.mjs",
     "eval:ai:replay": "node evals/replay-policy.mjs",
-    "eval:marketplace": "node evals/run-marketplace-eval.mjs"
+    "eval:marketplace": "node evals/run-marketplace-eval.mjs",
+    "metrics:summary": "node scripts/metrics-summary.mjs --database ./data/rental.sqlite"
   },
   "dependencies": {
     "sharp": "0.35.4"

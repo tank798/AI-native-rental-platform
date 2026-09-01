@@ -17,7 +17,7 @@ function decisionFor(items, party) {
 }
 
 /** Enforces same-document, same-input bilateral consent for one match case. */
-export function createConfirmationService({ matchCaseRepository, contactService, contactGrantService, clock = createClock() }) {
+export function createConfirmationService({ matchCaseRepository, contactService, contactGrantService, eventService = null, clock = createClock() }) {
   if (!matchCaseRepository) throw new Error("confirmation service requires matchCaseRepository");
   if (!contactService || !contactGrantService) throw new Error("confirmation service requires contact services");
 
@@ -87,6 +87,18 @@ export function createConfirmationService({ matchCaseRepository, contactService,
         supplyInputVersion: matchCase.supplyInputVersion,
         decision,
         at
+      });
+      eventService?.record({
+        type: "confirmation.recorded",
+        aggregateId: matchCaseId,
+        actorOwnerId: ownerId,
+        payload: {
+          party: participant.party,
+          termsVersion: matchCase.terms.version,
+          latencyMs: Math.max(0, Date.parse(at) - Date.parse(matchCase.createdAt))
+        },
+        dedupeKey: `confirmation:${matchCaseId}:${participant.party}:${matchCase.terms.version}`,
+        createdAt: at
       });
       const afterDecision = matchCaseRepository.get(matchCaseId);
       const decisions = activeDecisions(matchCaseRepository, afterDecision);

@@ -11,11 +11,13 @@ import { validateSupplyDraft } from "./src/simulation-engine.mjs";
 import { parseSupplyText } from "./src/supply-parser.mjs";
 import { openRentalDatabase } from "./src/server/database.mjs";
 import { createIntakeService } from "./src/server/intake-service.mjs";
+import { createEventService } from "./src/server/event-service.mjs";
 import { createMatchingService } from "./src/server/matching-service.mjs";
 import { createMediaRepository } from "./src/server/media-repository.mjs";
 import { createMediaService } from "./src/server/media-service.mjs";
 import { createMatchingWorker } from "./src/server/matching-worker.mjs";
 import { createOutboxRepository } from "./src/server/outbox-repository.mjs";
+import { createNotificationService } from "./src/server/notification-service.mjs";
 import { createRateLimiter } from "./src/server/rate-limit.mjs";
 import { parseContactEncryptionKey } from "./src/server/contact-service.mjs";
 import { assertSameOrigin, httpError, readJson } from "./src/server/request-guards.mjs";
@@ -23,11 +25,13 @@ import { normalizeMarketMode, readRuntimeConfig } from "./src/server/runtime-con
 import { parseIntakeRequest, parseTaskCreateRequest } from "./src/server/schemas.mjs";
 import { createSessionService } from "./src/server/session-service.mjs";
 import { createVerificationService } from "./src/server/verification-service.mjs";
+import { createViewingService } from "./src/server/viewing-service.mjs";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const EVIDENCE_JSON_LIMIT = 12 * 1024 * 1024;
 const MEDIA_JSON_LIMIT = 12 * 1024 * 1024;
 const EVIDENCE_KINDS = new Set(["identity", "roleDocument", "rightsDocument", "livePhotoChallenge"]);
+const REPORT_REASONS = new Set(["broker_or_fee", "mismatch", "stolen_photo", "unavailable", "safety", "other"]);
 const MIME_EXTENSIONS = new Map([
   ["image/jpeg", ".jpg"],
   ["image/png", ".png"],
@@ -147,7 +151,8 @@ function publicTask(task) {
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     lastMatchAt: task.lastMatchAt,
-    expiresAt: task.expiresAt
+    expiresAt: task.expiresAt,
+    lifecycleVersion: task.lifecycleVersion
   };
 }
 
@@ -289,6 +294,7 @@ export function createRentalServer(options = {}) {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   fs.mkdirSync(uploadRoot, { recursive: true });
   const repository = openRentalDatabase(databasePath, { clock });
+  const events = createEventService({ database: repository, clock });
   const verification = createVerificationService({ repository, clock });
   const mediaRepository = createMediaRepository({ database: repository, clock });
   const media = createMediaService({ mediaRepository, uploadRoot, clock });
@@ -297,8 +303,25 @@ export function createRentalServer(options = {}) {
     clock,
     contactEncryptionKey,
     onContactSecurityError: options.onContactSecurityError,
-    mediaRepository
+    mediaRepository,
+    eventService: events
   });
+  const notifications = createNotificationService({ database: repository, clock });
+  const viewings = createViewingService({
+    database: repository,
+    matchCaseRepository: matching.matchCaseRepository,
+    contactGrantService: matching.contactGrants,
+    eventService: events,
+    notificationService: notifications,
+    clock
+  });
+  const reportStatements = {
+    insert: repository.raw.prepare(`
+      INSERT INTO reports(id, match_case_id, reporter_owner_id, reason_code, description, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 'open', ?, ?)
+    `),
+    byId: repository.raw.prepare("SELECT * FROM reports WHERE id = ?")
+  };
   const outbox = createOutboxRepository({ database: repository, clock, ...(options.outboxOptions || {}) });
   const worker = createMatchingWorker({
     outboxRepository: outbox,
@@ -327,6 +350,8 @@ export function createRentalServer(options = {}) {
         outbox.compensateUnmatched({ olderThanMs: Math.max(60_000, schedulerMs * 6) });
         worker.drain();
         matching.contactGrants.cleanupExpired();
+        viewings.cancelInvalid();
+        notifications.syncAll();
         repository.cleanupExpiredSessions();
         await media.cleanupPending();
       } catch (error) {
@@ -476,10 +501,19 @@ export function createRentalServer(options = {}) {
       kind: body.kind,
       label,
       payload,
-      expiresAt: isoTimestampAfterDays(clock, 30),
+      expiresAt: isoTimestampAfterDays(clock, 14),
       clientRequestId: body.clientRequestId
     });
     worker.drain();
+    if (created.created) events.record({
+      type: "task.activated",
+      aggregateId: created.task.id,
+      actorOwnerId: session.id,
+      payload: { kind: created.task.kind, inputVersion: created.task.inputVersion, lifecycleVersion: created.task.lifecycleVersion },
+      dedupeKey: `task-activated:${created.task.id}:${created.task.lifecycleVersion}`,
+      createdAt: created.task.createdAt
+    });
+    notifications.syncOwner(session.id);
     const snapshot = matching.snapshot(created.task.id);
     return json(response, created.created ? 201 : 200, {
       ...snapshot,
@@ -562,6 +596,25 @@ export function createRentalServer(options = {}) {
       return json(response, 200, { tasks });
     }
 
+    if (url.pathname === "/api/notifications") {
+      if (request.method === "GET") return json(response, 200, notifications.list(session.id));
+      if (request.method === "POST") {
+        assertSameOrigin(request);
+        const body = await readJson(request);
+        if (body.action !== "mark_all_read") throw httpError(422, "NOTIFICATION_ACTION_INVALID", "通知操作无效");
+        notifications.markAllRead(session.id);
+        return json(response, 200, notifications.list(session.id));
+      }
+    }
+    const notificationReadRoute = url.pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
+    if (request.method === "POST" && notificationReadRoute) {
+      assertSameOrigin(request);
+      await readJson(request);
+      const item = notifications.markRead(decodeURIComponent(notificationReadRoute[1]), session.id);
+      if (!item) return json(response, 404, { error: "通知不存在", code: "NOTIFICATION_NOT_FOUND" });
+      return json(response, 200, { notification: item, unreadCount: notifications.unreadCount(session.id) });
+    }
+
     if (url.pathname === "/api/profile/contact") {
       if (request.method === "GET") {
         return json(response, 200, { contact: matching.contacts.getMasked(session.id) });
@@ -620,6 +673,7 @@ export function createRentalServer(options = {}) {
       const decision = matchDecisionRoute[2] === "confirm"
         ? matching.confirmations.confirm(input)
         : matching.confirmations.decline(input);
+      notifications.syncAll();
       return json(response, 200, {
         matchCase: publicMatchCase(matching, decision.matchCase, session.id),
         idempotent: decision.idempotent
@@ -629,7 +683,48 @@ export function createRentalServer(options = {}) {
     const matchContactRoute = url.pathname.match(/^\/api\/matches\/([^/]+)\/contact$/);
     if (request.method === "GET" && matchContactRoute) {
       const result = matching.contactGrants.getForOwner(decodeURIComponent(matchContactRoute[1]), session.id);
+      notifications.syncOwner(session.id);
       return json(response, 200, result);
+    }
+
+    const matchViewingRoute = url.pathname.match(/^\/api\/matches\/([^/]+)\/viewings$/);
+    if (matchViewingRoute) {
+      const matchCaseId = decodeURIComponent(matchViewingRoute[1]);
+      if (request.method === "GET") return json(response, 200, { appointments: viewings.listForCase(matchCaseId, session.id) });
+      if (request.method === "POST") {
+        assertSameOrigin(request);
+        enforceWriteLimit(request, session);
+        const body = await readJson(request);
+        return json(response, 201, viewings.propose({ matchCaseId, ownerId: session.id, startsAt: body.startsAt }));
+      }
+    }
+    const viewingDecisionRoute = url.pathname.match(/^\/api\/viewings\/([^/]+)\/(accept|reject)$/);
+    if (request.method === "POST" && viewingDecisionRoute) {
+      assertSameOrigin(request);
+      enforceWriteLimit(request, session);
+      await readJson(request);
+      return json(response, 200, viewings.respond({
+        appointmentId: decodeURIComponent(viewingDecisionRoute[1]),
+        ownerId: session.id,
+        decision: viewingDecisionRoute[2] === "accept" ? "accepted" : "rejected"
+      }));
+    }
+
+    const matchReportRoute = url.pathname.match(/^\/api\/matches\/([^/]+)\/reports$/);
+    if (request.method === "POST" && matchReportRoute) {
+      assertSameOrigin(request);
+      enforceWriteLimit(request, session);
+      const matchCaseId = decodeURIComponent(matchReportRoute[1]);
+      if (!matching.matchCaseRepository.getForOwner(matchCaseId, session.id)) return json(response, 404, { error: "匹配案例不存在", code: "MATCH_CASE_NOT_FOUND" });
+      const body = await readJson(request);
+      const reasonCode = String(body.reasonCode || "");
+      if (!REPORT_REASONS.has(reasonCode)) throw httpError(422, "REPORT_REASON_INVALID", "举报原因无效");
+      const description = String(body.description || "").trim().slice(0, 500);
+      const id = randomUUID();
+      const at = clock.nowIso();
+      reportStatements.insert.run(id, matchCaseId, session.id, reasonCode, description, at, at);
+      events.record({ type: "report.created", aggregateId: matchCaseId, actorOwnerId: session.id, payload: { reasonCode }, dedupeKey: `report:${id}`, createdAt: at });
+      return json(response, 201, { report: { id, matchCaseId, reasonCode, description, status: "open", createdAt: at } });
     }
 
     const clarificationAnswerMatch = url.pathname.match(/^\/api\/matches\/([^/]+)\/clarifications\/([^/]+)\/answers$/);
@@ -645,6 +740,18 @@ export function createRentalServer(options = {}) {
         ownerId: session.id,
         rawAnswer: body.answer
       });
+      events.record({
+        type: "clarification.completed",
+        aggregateId: matchCaseId,
+        actorOwnerId: session.id,
+        payload: {
+          party: matching.matchCaseRepository.participantParty(matchCaseId, session.id),
+          questionCount: 1,
+          latencyMs: Math.max(0, Date.parse(clock.nowIso()) - Date.parse(answered.answer?.createdAt || clock.nowIso()))
+        },
+        dedupeKey: `clarification-completed:${clarificationId}`
+      });
+      notifications.syncAll();
       const matchCase = matching.matchCaseRepository.getForOwner(matchCaseId, session.id);
       return json(response, 200, {
         matchCase: publicMatchCase(matching, matchCase, session.id),
@@ -657,6 +764,45 @@ export function createRentalServer(options = {}) {
       const matchCase = matching.matchCaseRepository.getForOwner(decodeURIComponent(matchCaseMatch[1]), session.id);
       if (!matchCase) return json(response, 404, { error: "匹配案例不存在", code: "MATCH_CASE_NOT_FOUND" });
       return json(response, 200, { matchCase: publicMatchCase(matching, matchCase, session.id) });
+    }
+
+    const taskRenewRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/renew$/);
+    if (request.method === "POST" && taskRenewRoute) {
+      assertSameOrigin(request);
+      enforceWriteLimit(request, session);
+      await readJson(request);
+      const taskId = decodeURIComponent(taskRenewRoute[1]);
+      const task = repository.getTask(taskId);
+      if (!task || task.ownerId !== session.id) return json(response, 404, { error: "任务不存在", code: "TASK_NOT_FOUND" });
+      const base = Math.max(clock.now().getTime(), Date.parse(task.expiresAt));
+      const expiresAt = new Date(base + 14 * 24 * 60 * 60 * 1000).toISOString();
+      const updated = repository.renewTask(taskId, session.id, expiresAt);
+      events.record({
+        type: "task.renewed",
+        aggregateId: taskId,
+        actorOwnerId: session.id,
+        payload: { inputVersion: updated.inputVersion, lifecycleVersion: updated.lifecycleVersion, expiresAt },
+        dedupeKey: `task-renewed:${taskId}:${updated.lifecycleVersion}`
+      });
+      worker.drain();
+      viewings.cancelInvalid();
+      notifications.syncOwner(session.id);
+      return json(response, 200, { task: publicTask(updated) });
+    }
+
+    const taskCloneRoute = url.pathname.match(/^\/api\/tasks\/([^/]+)\/clone$/);
+    if (request.method === "POST" && taskCloneRoute) {
+      assertSameOrigin(request);
+      enforceWriteLimit(request, session);
+      await readJson(request);
+      const source = repository.getTask(decodeURIComponent(taskCloneRoute[1]));
+      if (!source || source.ownerId !== session.id) return json(response, 404, { error: "任务不存在", code: "TASK_NOT_FOUND" });
+      const id = randomUUID();
+      const payload = { ...structuredClone(source.payload), inputVersion: 1 };
+      const created = repository.createTaskIdempotent({ id, ownerId: session.id, kind: source.kind, label: source.label, payload, inputVersion: 1, expiresAt: isoTimestampAfterDays(clock, 14), clientRequestId: randomUUID() });
+      events.record({ type: "task.activated", aggregateId: id, actorOwnerId: session.id, payload: { kind: source.kind, inputVersion: 1, lifecycleVersion: 1 }, dedupeKey: `task-activated:${id}:1` });
+      worker.drain();
+      return json(response, 201, { ...matching.snapshot(id), task: publicTask(created.task) });
     }
 
     const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
@@ -674,6 +820,22 @@ export function createRentalServer(options = {}) {
         if (!["active", "paused", "closed"].includes(body.status)) throw Object.assign(new Error("任务状态无效"), { status: 422 });
         const updated = repository.setTaskStatus(task.id, session.id, body.status);
         worker.drain();
+        viewings.cancelInvalid();
+        if (body.status === "active") events.record({
+          type: "task.activated",
+          aggregateId: task.id,
+          actorOwnerId: session.id,
+          payload: { kind: updated.kind, inputVersion: updated.inputVersion, lifecycleVersion: updated.lifecycleVersion },
+          dedupeKey: `task-reactivated:${task.id}:${updated.inputVersion}`
+        });
+        else events.record({
+          type: `task.${body.status}`,
+          aggregateId: task.id,
+          actorOwnerId: session.id,
+          payload: { inputVersion: updated.inputVersion },
+          dedupeKey: `task-${body.status}:${task.id}:${updated.inputVersion}`
+        });
+        notifications.syncAll();
         return json(response, 200, { task: publicTask(updated) });
       }
       if (request.method === "DELETE") {
@@ -724,6 +886,9 @@ export function createRentalServer(options = {}) {
     server,
     repository,
     matching,
+    events,
+    notifications,
+    viewings,
     verification,
     media,
     mediaRepository,

@@ -147,6 +147,44 @@ export function deleteServerTask(taskId) {
   return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
 }
 
+export function renewServerTask(taskId) {
+  return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/renew`, { method: "POST", body: "{}" });
+}
+
+export function cloneServerTask(taskId) {
+  return apiRequest(`/api/tasks/${encodeURIComponent(taskId)}/clone`, { method: "POST", body: "{}" });
+}
+
+export function listNotifications() {
+  return apiRequest("/api/notifications");
+}
+
+export function markAllNotificationsRead() {
+  return apiRequest("/api/notifications", { method: "POST", body: JSON.stringify({ action: "mark_all_read" }) });
+}
+
+export function listViewingAppointments(matchCaseId) {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/viewings`);
+}
+
+export function proposeViewing(matchCaseId, startsAt) {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/viewings`, {
+    method: "POST",
+    body: JSON.stringify({ startsAt })
+  });
+}
+
+export function respondViewing(appointmentId, decision) {
+  return apiRequest(`/api/viewings/${encodeURIComponent(appointmentId)}/${decision}`, { method: "POST", body: "{}" });
+}
+
+export function createMatchReport(matchCaseId, reasonCode, description = "") {
+  return apiRequest(`/api/matches/${encodeURIComponent(matchCaseId)}/reports`, {
+    method: "POST",
+    body: JSON.stringify({ reasonCode, description })
+  });
+}
+
 function fileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

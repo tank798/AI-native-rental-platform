@@ -26,7 +26,8 @@ function taskFromRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastMatchedAt: row.last_matched_at || row.last_match_at,
-    expiresAt: row.expires_at
+    expiresAt: row.expires_at,
+    lifecycleVersion: Number(row.lifecycle_version || 1)
   };
 }
 

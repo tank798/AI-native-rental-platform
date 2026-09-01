@@ -33,7 +33,8 @@ function taskFromRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastMatchAt: row.last_matched_at || row.last_match_at,
-    expiresAt: row.expires_at
+    expiresAt: row.expires_at,
+    lifecycleVersion: Number(row.lifecycle_version || 1)
   };
 }
 
@@ -153,6 +154,12 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
     updateTaskStatus: db.prepare(`
       UPDATE tasks SET status = ?, payload_json = ?, input_version = ?, updated_at = ?
       WHERE id = ? AND owner_id = ? AND input_version = ?
+    `),
+    renewTask: db.prepare(`
+      UPDATE tasks
+      SET status = 'active', payload_json = ?, input_version = ?, lifecycle_version = ?, updated_at = ?, expires_at = ?
+      WHERE id = ? AND owner_id = ? AND input_version = ? AND lifecycle_version = ?
+        AND status IN ('active', 'paused')
     `),
     deleteTask: db.prepare("DELETE FROM tasks WHERE id = ? AND owner_id = ?"),
     candidatesByTask: db.prepare("SELECT * FROM match_candidates WHERE receiver_task_id = ? ORDER BY created_at ASC"),
@@ -378,6 +385,8 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
       return transaction(() => {
         const current = taskFromRow(statements.taskById.get(id));
         if (!current || current.ownerId !== ownerId) return null;
+        if (current.status === "expired") throw Object.assign(new Error("到期任务为只读，请复制条件创建新任务"), { status: 409, code: "TASK_EXPIRED_READ_ONLY" });
+        if (current.status === "closed") throw Object.assign(new Error("已关闭任务为只读"), { status: 409, code: "TASK_CLOSED_READ_ONLY" });
         if (current.status === status) return current;
         const at = now();
         const inputVersion = current.inputVersion + 1;
@@ -399,6 +408,35 @@ export function openRentalDatabase(filename, { clock = createClock() } = {}) {
           status === "active" ? "task.match_requested" : "task.match_invalidated",
           at
         );
+        return taskFromRow(statements.taskById.get(id));
+      });
+    },
+
+    renewTask(id, ownerId, expiresAt) {
+      return transaction(() => {
+        const current = taskFromRow(statements.taskById.get(id));
+        if (!current || current.ownerId !== ownerId) return null;
+        if (!["active", "paused"].includes(current.status)) {
+          throw Object.assign(new Error("只有进行中或暂停的任务可以续期"), { status: 409, code: "TASK_NOT_RENEWABLE" });
+        }
+        const at = now();
+        const inputVersion = current.inputVersion + 1;
+        const lifecycleVersion = current.lifecycleVersion + 1;
+        const payload = { ...current.payload, inputVersion };
+        const changed = statements.renewTask.run(
+          JSON.stringify(payload),
+          inputVersion,
+          lifecycleVersion,
+          at,
+          expiresAt,
+          id,
+          ownerId,
+          current.inputVersion,
+          current.lifecycleVersion
+        ).changes > 0;
+        if (!changed) throw Object.assign(new Error("任务版本已变化"), { status: 409, code: "TASK_VERSION_CONFLICT" });
+        appendEvent(id, "task.renewed", { inputVersion, lifecycleVersion, expiresAt }, at);
+        enqueueTaskEvent(id, inputVersion, "task.match_requested", at);
         return taskFromRow(statements.taskById.get(id));
       });
     },

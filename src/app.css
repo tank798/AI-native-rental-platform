@@ -4625,6 +4625,28 @@ body[data-motion="reduced"] .voice-control.is-listening::after {
   line-height: 1.4;
 }
 
+.task-card-actions { display: inline-flex; align-items: center; gap: 6px; }
+.task-renew-action { padding: 0 10px; border: 1px solid #cad5e3; border-radius: 11px; background: white; color: #31445b; font-size: 11px; font-weight: 800; }
+
+.viewing-card {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #dce6f2;
+  border-radius: 18px;
+  background: #f7faff;
+}
+.viewing-card > span { color: #66758a; font-size: 11px; font-weight: 800; }
+.viewing-card h3 { margin: 6px 0 8px; font-size: 18px; }
+.viewing-card p { margin: 0; color: var(--ink-2); font-size: 13px; }
+.viewing-card label { display: grid; gap: 6px; color: var(--ink-2); font-size: 12px; font-weight: 700; }
+.viewing-card input { min-height: 44px; padding: 0 10px; border: 1px solid #cdd9e6; border-radius: 12px; background: white; }
+.viewing-card > .primary-button { margin-top: 12px; }
+.viewing-card > div { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.viewing-card > div .primary-button,
+.viewing-card > div .secondary-button { margin: 0; }
+.message-list article.is-read { opacity: .72; }
+.message-list article.is-unread { background: #f7faff; }
+
 input[aria-invalid="true"],
 select[aria-invalid="true"],
 textarea[aria-invalid="true"],

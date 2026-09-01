@@ -173,6 +173,12 @@ test("单方确认仍锁定联系人，双方确认同版条款后才解锁", as
     await expect(renter.page.getByRole("button", { name: "点击查看对方联系方式" })).toBeVisible({ timeout: 8_000 });
     await renter.page.getByRole("button", { name: "点击查看对方联系方式" }).click();
     await expect(renter.page.getByText("supply.ui.e2e@example.com")).toBeVisible();
+    await renter.page.locator('[data-input="viewing-starts-at"]').fill("2026-09-05T10:30");
+    await renter.page.getByRole("button", { name: "发送给对方" }).click();
+    await expect(renter.page.getByText("等待对方回应")).toBeVisible();
+    await expect(supply.page.getByRole("button", { name: "接受" })).toBeVisible({ timeout: 8_000 });
+    await supply.page.getByRole("button", { name: "接受" }).click();
+    await expect(supply.page.getByText("双方已约定")).toBeVisible();
   } finally {
     await renter.context.close();
     await supply.context.close();

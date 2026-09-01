@@ -6,7 +6,7 @@ export function daysUntil(isoDate, nowIso) {
   return daysBetweenIsoDates(nowIso, isoDate);
 }
 
-export function createTaskLifecycle(createdAt, { durationDays = 30, renewalLeadDays = 5 } = {}) {
+export function createTaskLifecycle(createdAt, { durationDays = 14, renewalLeadDays = 2 } = {}) {
   const expiresAt = addDaysToIso(createdAt, durationDays);
   return {
     createdAt,
@@ -14,7 +14,8 @@ export function createTaskLifecycle(createdAt, { durationDays = 30, renewalLeadD
     renewalAt: addDaysToIso(expiresAt, -renewalLeadDays),
     durationDays,
     renewalLeadDays,
-    renewalCount: 0
+    renewalCount: 0,
+    lifecycleVersion: 1
   };
 }
 
@@ -37,7 +38,8 @@ export function renewTaskLifecycle(lifecycle, nowIso) {
     ...lifecycle,
     expiresAt,
     renewalAt: addDaysToIso(expiresAt, -lifecycle.renewalLeadDays),
-    renewalCount: Number(lifecycle.renewalCount || 0) + 1
+    renewalCount: Number(lifecycle.renewalCount || 0) + 1,
+    lifecycleVersion: Number(lifecycle.lifecycleVersion || 1) + 1
   };
 }
 

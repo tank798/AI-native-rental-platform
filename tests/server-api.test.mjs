@@ -99,7 +99,7 @@ test("服务端持久化双边任务并在新供给到达后增量更新双方�
   });
   assert.equal(renterCreated.response.status, 201);
   assert.equal(renterCreated.payload.candidates.length, 0);
-  assert.equal(renterCreated.payload.task.expiresAt, "2026-09-28T16:00:00.000Z");
+    assert.equal(renterCreated.payload.task.expiresAt, "2026-09-12T16:00:00.000Z");
   const persistedMandate = app.repository.getTask(renterCreated.payload.task.id).payload.mandate;
   assert.equal(persistedMandate.maxCommuteMinutes, 25);
   assert.equal(persistedMandate.leaseMonths, 6);

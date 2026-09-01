@@ -5,7 +5,6 @@ import { applyFieldProposal, confirmField } from "./field-state.mjs";
 import { createEmptySupplyDraft, parseSupplyText } from "./supply-parser.mjs";
 import { createClock, dateAtShanghaiNoon, daysBetweenIsoDates } from "./clock.mjs";
 import {
-  evaluateReport,
   matchMandate,
   matchSupplyDraft,
   runLabScenario,
@@ -21,12 +20,13 @@ import { bearAgentMarkup, launchBearAgent, mountBearAgents } from "./bear-agent.
 import {
   addDaysToIso,
   createTaskLifecycle,
-  evaluateTaskLifecycle,
-  renewTaskLifecycle
+  evaluateTaskLifecycle
 } from "./task-lifecycle.mjs";
 import {
   answerMatchClarification,
+  cloneServerTask,
   confirmMatchCase,
+  createMatchReport,
   createServerTask,
   declineMatchCase,
   ensureServerSession,
@@ -37,9 +37,15 @@ import {
   getServerHealth,
   getServerTask,
   listTaskMatches,
+  listNotifications,
+  listViewingAppointments,
   listServerTasks,
+  markAllNotificationsRead,
   parseRenterWithServer,
   parseSupplyWithServer,
+  proposeViewing,
+  renewServerTask,
+  respondViewing,
   setProfileContact,
   setServerTaskStatus,
   uploadListingMedia,
@@ -141,13 +147,6 @@ function freshSupplyDraft() {
   return createEmptySupplyDraft();
 }
 
-const demoRenewalTask = {
-  id: "renewal-demo",
-  kind: "supply",
-  label: "静安寺次卧",
-  lifecycle: createTaskLifecycle(addDaysToIso(todayInShanghai(), -25))
-};
-
 const STORAGE_KEY = "zhunaer-product-state-v1";
 
 function defaultProductStats() {
@@ -157,7 +156,6 @@ function defaultProductStats() {
     scanned: 0,
     suitable: 0,
     confirmed: 0,
-    avoidedMessages: 0,
     dailyScanned: [0, 0, 0, 0, 0, 0, 0]
   };
 }
@@ -233,9 +231,13 @@ function initialProductState() {
     reportType: "broker_or_fee",
     reportHasEvidence: false,
     reportResult: null,
-    taskNotices: [structuredClone(demoRenewalTask)],
+    notifications: [],
+    notificationUnreadCount: 0,
+    notificationsLoading: false,
+    viewingAppointments: [],
+    viewingStartsAt: "",
+    viewingSubmitting: false,
     archivedTasks: [],
-    messagesRead: false,
     activeScenario: "full-demo",
     regression: null,
     toast: null,
@@ -309,7 +311,6 @@ function commitCompletedTask(result) {
   if (!state.task || state.task.statsCommitted) return;
   state.stats.scanned += result.scanned;
   state.stats.suitable += result.candidates.length;
-  state.stats.avoidedMessages += Math.max(0, result.scanned * 2 - result.candidates.length);
   state.stats.dailyScanned = [...state.stats.dailyScanned.slice(-6), result.scanned];
   state.task.statsCommitted = true;
 }
@@ -505,7 +506,9 @@ function tabBar() {
 }
 
 function tabButton(value, iconName, label) {
-  const badge = value === "messages" && !state.messagesRead ? '<i class="tab-badge">1</i>' : "";
+  const badge = value === "messages" && state.notificationUnreadCount
+    ? `<i class="tab-badge">${escapeText(Math.min(99, state.notificationUnreadCount))}</i>`
+    : "";
   return `<button class="tab-item" data-action="switch-tab" data-value="${value}" aria-label="${label}" aria-current="${state.tab === value ? "page" : "false"}">${icon(iconName)}<span>${label}</span>${badge}</button>`;
 }
 
@@ -894,20 +897,25 @@ function insightsScreen() {
 }
 
 function messagesScreen() {
-  const notice = state.taskNotices[0] || demoRenewalTask;
-  const noticeState = evaluateTaskLifecycle(notice.lifecycle, todayInShanghai());
+  const notificationLabel = {
+    new_candidate: "新的匹配候选",
+    clarification_needed: "需要补充信息",
+    terms_ready: "条款待确认",
+    other_confirmed: "对方已确认",
+    contact_unlocked: "联系方式已解锁",
+    contact_revoked: "联系授权已撤销",
+    task_expiring: "任务即将到期",
+    viewing_proposed: "收到看房提议",
+    viewing_accepted: "看房时间已接受",
+    viewing_rejected: "看房时间未被接受",
+    viewing_cancelled: "看房提议已取消"
+  };
   return `<section class="messages-screen">
     <header><h1>消息</h1><button data-action="open-settings" aria-label="消息设置">${icon("settings")}</button></header>
-    <article class="expiry-message ${noticeState.renewalDue ? "is-due" : "is-renewed"}">
-      <div class="message-icon">${icon("clock")}</div>
-      <div><span>${noticeState.renewalDue ? `任务将于 ${formatShortDate(notice.lifecycle.expiresAt)} 到期` : `已续至 ${formatShortDate(notice.lifecycle.expiresAt)}`}</span><h2>${escapeHtml(notice.label)}</h2><p>${noticeState.daysRemaining} 天后停止接收新匹配</p></div>
-      ${noticeState.renewalDue ? `<button data-action="renew-task" data-id="${escapeAttribute(notice.id)}">续 30 天</button>` : `<b class="renewed-mark">已续期</b>`}
-    </article>
-    <div class="message-list">
-      <article><span class="message-avatar bear"><img src="./assets/bear-agent-anchor.png" alt="" width="48" height="48" /></span><div><b>小熊分身</b><p>静安寺附近新增 1 套合适房源</p></div><time>10:24</time></article>
-      <article><span class="message-avatar confirm">${icon("check")}</span><div><b>双方确认</b><p>联系方式已解锁，可以约看房</p></div><time>昨天</time></article>
-      <article><span class="message-avatar soft">${icon("shield")}</span><div><b>举报进度</b><p>房源已停止进入新的匹配</p></div><time>周一</time></article>
-    </div>
+    ${state.notificationsLoading ? '<div class="task-center-loading" role="status">正在读取通知…</div>' : ""}
+    <div class="message-list">${state.notifications.length
+      ? state.notifications.map((item) => `<article class="${item.readAt ? "is-read" : "is-unread"}"><span class="message-avatar ${item.type.includes("contact") ? "confirm" : "soft"}">${item.type.includes("contact") ? icon("check") : icon("bell")}</span><div><b>${escapeText(item.payload?.title || notificationLabel[item.type] || "状态更新")}</b><p>${escapeText(item.payload?.message || notificationLabel[item.type] || "匹配状态已更新")}</p></div><time>${escapeText(formatShortDate(item.createdAt))}</time></article>`).join("")
+      : '<div class="task-center-empty"><b>暂无通知</b><p>新的候选、确认和看房动作会保存在这里。</p></div>'}</div>
   </section>`;
 }
 
@@ -936,8 +944,8 @@ function settingsScreen() {
     ? `${({ phone: "手机", wechat: "微信", email: "邮箱" })[state.contactProfile.type] || "联系方式"} · ${state.contactProfile.maskedValue}`
     : "未设置，确认条款前必须补充";
   return `<section class="settings-screen"><div class="subpage-nav settings-nav"><button data-action="back-profile" aria-label="返回我的">${icon("back")}</button><h1>设置</h1><span></span></div>
-    <section class="settings-group"><h2>匹配与通知</h2>${settingsToggle("expiryReminder", "到期提醒", "任务到期前 5 天提醒续期")}${settingsToggle("candidateNotifications", "新候选通知", "出现新的合适房源或租客时通知")}${settingsToggle("privateNegotiation", "私密议价", "预算上限与出租底价仅由分身使用")}</section>
-    <section class="settings-group"><h2>账户与数据</h2><button class="settings-link" data-action="open-contact-settings"><span><b>接收看房的联系方式</b><em>${escapeText(contactSummary)}</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="city"><span><b>匹配城市</b><em>上海</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="retention"><span><b>任务有效期</b><em>30 天，过期自动停止匹配</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="privacy"><span><b>隐私与数据</b><em>每位用户的数据独立保存</em></span>${icon("arrow")}</button></section>
+    <section class="settings-group"><h2>匹配与通知</h2>${settingsToggle("expiryReminder", "到期提醒", "任务到期前 48 小时提醒续期")}${settingsToggle("candidateNotifications", "新候选通知", "出现新的合适房源或租客时通知")}${settingsToggle("privateNegotiation", "私密议价", "预算上限与出租底价仅由分身使用")}</section>
+    <section class="settings-group"><h2>账户与数据</h2><button class="settings-link" data-action="open-contact-settings"><span><b>接收看房的联系方式</b><em>${escapeText(contactSummary)}</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="city"><span><b>匹配城市</b><em>上海</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="retention"><span><b>任务有效期</b><em>14 天，过期只读</em></span>${icon("arrow")}</button><button class="settings-link" data-action="setting-info" data-value="privacy"><span><b>隐私与数据</b><em>每位用户的数据独立保存</em></span>${icon("arrow")}</button></section>
     <section class="settings-group"><h2>关于</h2><button class="settings-link" data-action="setting-info" data-value="about"><span><b>住哪儿</b><em>体验版 0.7 · 100×100 真实测试市场</em></span>${icon("arrow")}</button></section>
   </section>`;
 }
@@ -1053,6 +1061,27 @@ function matchDecisionActions(candidate) {
   return `<button class="primary-button" data-action="confirm-match">确认条款 v${escapeText(matchCase.currentTerms?.version)}</button><button class="report-link" data-action="decline-match">拒绝当前条款</button>`;
 }
 
+function viewingActions() {
+  const matchCase = state.activeMatchCase;
+  if (!matchCase?.contactUnlocked) return "";
+  const appointment = state.viewingAppointments[0] || null;
+  if (appointment) {
+    const date = new Intl.DateTimeFormat("zh-CN", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Asia/Shanghai"
+    }).format(new Date(appointment.startsAt));
+    if (appointment.status === "proposed" && appointment.proposedBy !== matchCase.myParty) {
+      return `<section class="viewing-card"><span>对方提出看房</span><h3>${escapeText(date)}</h3><div><button class="primary-button" data-action="respond-viewing" data-id="${escapeAttribute(appointment.id)}" data-value="accept">接受</button><button class="secondary-button" data-action="respond-viewing" data-id="${escapeAttribute(appointment.id)}" data-value="reject">拒绝</button></div></section>`;
+    }
+    const status = { proposed: "等待对方回应", accepted: "双方已约定", rejected: "该时间未被接受", cancelled: "提议已取消" }[appointment.status] || appointment.status;
+    return `<section class="viewing-card"><span>看房安排</span><h3>${escapeText(date)}</h3><p>${escapeText(status)}</p></section>`;
+  }
+  return `<section class="viewing-card"><span>真实下一步</span><h3>提出看房时间</h3><label>日期和时间<input type="datetime-local" data-input="viewing-starts-at" value="${escapeAttribute(state.viewingStartsAt)}" /></label><button class="primary-button" data-action="propose-viewing" ${state.viewingSubmitting ? "disabled" : ""}>${state.viewingSubmitting ? "正在发送…" : "发送给对方"}</button></section>`;
+}
+
 function listingShareText(candidate) {
   const listing = candidate.listing;
   return [
@@ -1103,12 +1132,17 @@ async function loadActiveMatchCase() {
   state.revealedContact = null;
   state.activeMatchCaseError = null;
   state.activeMatchCaseLoading = Boolean(requestedId);
+  state.viewingAppointments = [];
   render();
   if (!requestedId) return;
   try {
-    const { matchCase } = await getMatchCase(requestedId);
+    const [{ matchCase }, viewingResponse] = await Promise.all([
+      getMatchCase(requestedId),
+      listViewingAppointments(requestedId)
+    ]);
     if (activeCandidate()?.matchCaseId !== requestedId) return;
     state.activeMatchCase = matchCase;
+    state.viewingAppointments = viewingResponse.appointments || [];
   } catch (error) {
     if (activeCandidate()?.matchCaseId !== requestedId) return;
     state.activeMatchCaseError = error.message || "匹配进度读取失败";
@@ -1120,6 +1154,22 @@ async function loadActiveMatchCase() {
         requestAnimationFrame(() => app.querySelector("[data-terms-change-summary]")?.focus());
       }
     }
+  }
+}
+
+async function refreshNotifications({ markRead = false, renderNow = false } = {}) {
+  state.notificationsLoading = true;
+  if (renderNow) render();
+  try {
+    const response = markRead ? await markAllNotificationsRead() : await listNotifications();
+    state.notifications = response.notifications || [];
+    state.notificationUnreadCount = Number(response.unreadCount || 0);
+    markConnectionSuccess();
+  } catch (error) {
+    markConnectionOffline(error);
+  } finally {
+    state.notificationsLoading = false;
+    if (renderNow) render();
   }
 }
 
@@ -1171,7 +1221,7 @@ function candidateDetail() {
         return `<div class="agent-dialogue-row ${side}"><span>${actor}</span><div><b>${escapeText(event.title)}</b><p>${escapeText(event.detail)}</p></div></div>`;
       }).join("")}</section>
       ${matchClarificationSection(candidate)}
-      ${matchDecisionActions(candidate)}<button class="report-link" data-action="open-report">举报房源</button>
+      ${matchDecisionActions(candidate)}${viewingActions()}<button class="report-link" data-action="open-report">举报房源</button>
   `;
   return renderMatchDetail({
     selectionLabel: candidate.selectionLabel,
@@ -1199,7 +1249,7 @@ function tenantDetail(candidate) {
       <section class="fit-card"><header><h2>为什么合适</h2><b>${escapeText(candidate.score)}%</b></header>${candidate.reasons.map((item) => `<p>${escapeText(item)}</p>`).join("")}</section>
       <section class="notice-card"><h2>需要留意</h2>${candidate.caveats.map((item) => `<p>${escapeText(item)}</p>`).join("") || "<p>仍需双方完成条款确认</p>"}</section>
       ${matchClarificationSection(candidate)}
-      ${matchDecisionActions(candidate)}
+      ${matchDecisionActions(candidate)}${viewingActions()}
   `;
   return renderMatchDetail({
     selectionLabel: candidate.selectionLabel,
@@ -1608,9 +1658,10 @@ function applyServerSnapshot(snapshot, { renderNow = true } = {}) {
     lastMatchAt: snapshot.task.lastMatchAt,
     lifecycle: {
       createdAt: snapshot.task.createdAt?.slice(0, 10) || todayInShanghai(),
-      expiresAt: snapshot.task.expiresAt?.slice(0, 10) || addDaysToIso(todayInShanghai(), 30),
-      renewalLeadDays: 5,
-      retentionDays: 30
+      expiresAt: snapshot.task.expiresAt?.slice(0, 10) || addDaysToIso(todayInShanghai(), 14),
+      renewalLeadDays: 2,
+      retentionDays: 30,
+      lifecycleVersion: snapshot.task.lifecycleVersion || 1
     }
   };
   state.activeTaskId = snapshot.task.id;
@@ -1643,12 +1694,16 @@ function startTaskPolling(taskId) {
       applyServerSnapshot(await getServerTask(taskId));
       if (state.page === "candidate" && state.activeMatchCase?.id) {
         const previousCase = state.activeMatchCase;
+        const previousViewings = JSON.stringify(state.viewingAppointments);
         const { matchCase } = await getMatchCase(previousCase.id);
         state.activeMatchCase = matchCase;
+        const viewingResponse = await listViewingAppointments(previousCase.id);
+        state.viewingAppointments = viewingResponse.appointments || [];
         if (!matchCase.contactUnlocked) state.revealedContact = null;
         if (previousCase.status !== matchCase.status
           || previousCase.contactUnlocked !== matchCase.contactUnlocked
-          || previousCase.updatedAt !== matchCase.updatedAt) render();
+          || previousCase.updatedAt !== matchCase.updatedAt
+          || previousViewings !== JSON.stringify(state.viewingAppointments)) render();
       }
     } catch (error) {
       markConnectionOffline(error);
@@ -1673,6 +1728,7 @@ async function initializeServerState() {
     markConnectionSuccess();
     const profileContact = await getProfileContact();
     state.contactProfile = profileContact.contact;
+    await refreshNotifications();
     const tasks = await refreshTaskList();
     const route = parseRoute(location.href);
     if (route.name === "invalid") {
@@ -1908,9 +1964,7 @@ function resetAll() {
     contactLoading: false,
     contactSubmitting: false,
     reportResult: null,
-    taskNotices: [{ ...demoRenewalTask, lifecycle: createTaskLifecycle(addDaysToIso(todayInShanghai(), -25)) }],
     archivedTasks: [],
-    messagesRead: false,
     regression: null
   };
   render();
@@ -1943,6 +1997,7 @@ app.addEventListener("input", (event) => {
     }
     applyFieldErrorAttributes();
   }
+  if (key === "viewing-starts-at") state.viewingStartsAt = input.value;
   if (key === "supply-title") state.supplyDraft.title = input.value;
   if (key === "supply-address") state.supplyDraft.address = input.value;
   if (key === "supply-rent") {
@@ -2081,7 +2136,7 @@ app.addEventListener("click", async (event) => {
       state.tab = value;
       state.page = "root";
       state.revealedContact = null;
-      if (value === "messages") state.messagesRead = true;
+      if (value === "messages") await refreshNotifications({ markRead: true });
       if (value === "results" && state.activeTaskId) pushRoute({ name: "task", taskId: state.activeTaskId });
       else pushRoute({ name: "home" });
       render();
@@ -2117,6 +2172,35 @@ app.addEventListener("click", async (event) => {
         showToast(value === "active" ? "任务已恢复，将继续接收匹配" : "任务已暂停");
       } catch (error) {
         state.taskCenterError = error.message || "任务状态更新失败";
+        render();
+      }
+      break;
+    }
+    case "renew-server-task": {
+      target.disabled = true;
+      try {
+        const response = await renewServerTask(target.dataset.id);
+        const index = state.tasks.findIndex((task) => task.id === response.task.id);
+        if (index >= 0) state.tasks[index] = { ...state.tasks[index], ...response.task };
+        if (state.task?.remoteId === response.task.id) state.task.lifecycle.expiresAt = response.task.expiresAt.slice(0, 10);
+        await refreshTaskList();
+        await refreshNotifications();
+        showToast("已续期 14 天并重新匹配");
+      } catch (error) {
+        state.taskCenterError = error.message || "任务续期失败";
+        render();
+      }
+      break;
+    }
+    case "clone-task": {
+      target.disabled = true;
+      try {
+        const snapshot = await cloneServerTask(target.dataset.id);
+        await refreshTaskList();
+        await selectServerTask(snapshot.task.id);
+        showToast("已复制条件并创建新任务");
+      } catch (error) {
+        state.taskCenterError = error.message || "复制任务失败";
         render();
       }
       break;
@@ -2298,6 +2382,7 @@ app.addEventListener("click", async (event) => {
         const response = await confirmMatchCase(matchCase.id, matchCase.currentTerms.version, matchCase.currentTerms.hash);
         state.activeMatchCase = response.matchCase;
         state.revealedContact = null;
+        await refreshNotifications();
         showToast(response.idempotent ? "你已经确认过当前条款" : response.matchCase.status === "mutually_confirmed" ? "双方已确认同一条款" : "已确认，正在等待对方");
       } catch (error) {
         if (error.code === "CONTACT_REQUIRED") state.sheet = "contact";
@@ -2339,6 +2424,40 @@ app.addEventListener("click", async (event) => {
       }
       break;
     }
+    case "propose-viewing": {
+      const matchCase = state.activeMatchCase;
+      if (!matchCase?.contactUnlocked || !state.viewingStartsAt) {
+        showToast("请先选择看房时间");
+        break;
+      }
+      state.viewingSubmitting = true;
+      render();
+      try {
+        const response = await proposeViewing(matchCase.id, new Date(state.viewingStartsAt).toISOString());
+        state.viewingAppointments = [response.appointment];
+        state.viewingStartsAt = "";
+        await refreshNotifications();
+        showToast(response.idempotent ? "已有待回应的看房提议" : "看房时间已发送");
+      } catch (error) {
+        showToast(error.message || "看房提议发送失败");
+      } finally {
+        state.viewingSubmitting = false;
+        render();
+      }
+      break;
+    }
+    case "respond-viewing": {
+      target.disabled = true;
+      try {
+        const response = await respondViewing(target.dataset.id, value);
+        state.viewingAppointments = [response.appointment];
+        await refreshNotifications();
+        showToast(value === "accept" ? "已接受看房时间" : "已拒绝这个时间");
+      } catch (error) {
+        showToast(error.message || "看房回应失败");
+      }
+      break;
+    }
     case "hide-contact": state.revealedContact = null; render(); break;
     case "contact-tenant": showToast("已发起双方确认"); break;
     case "open-share": state.sheet = "share"; render(); break;
@@ -2355,9 +2474,19 @@ app.addEventListener("click", async (event) => {
     case "submit-report": {
       const candidate = activeCandidate();
       if (!candidate) break;
-      state.reportResult = evaluateReport({ listing: candidate.listing, reportType: state.reportType, reporterEvidence: { inAppFeeMessage: state.reportHasEvidence } });
-      state.sheet = "report-result";
-      render();
+      if (!candidate.matchCaseId) {
+        showToast("演示候选不会写入真实举报记录");
+        break;
+      }
+      target.disabled = true;
+      try {
+        const response = await createMatchReport(candidate.matchCaseId, state.reportType, state.reportHasEvidence ? "已选择提交站内客观证据" : "");
+        state.reportResult = { confirmed: false, finalAction: `举报 ${response.report.id.slice(0, 8)} 已进入人工复核队列` };
+        state.sheet = "report-result";
+        render();
+      } catch (error) {
+        showToast(error.message || "举报提交失败");
+      }
       break;
     }
     case "open-lab": state.sheet = "lab"; render(); break;
@@ -2399,7 +2528,7 @@ app.addEventListener("click", async (event) => {
     case "setting-info": {
       const messages = {
         city: "体验版当前开放上海",
-        retention: "所有找房和出租任务默认保留 30 天",
+        retention: "所有找房和出租任务默认有效 14 天，到期后只读",
         privacy: "私密预算、底价与联系方式不会进入公开匹配记录",
         about: "住哪儿体验版 · 本地 100×100 测试市场"
       };
@@ -2407,12 +2536,6 @@ app.addEventListener("click", async (event) => {
       break;
     }
     case "back-profile": state.page = "root"; state.tab = "profile"; render(); break;
-    case "renew-task": {
-      const notice = state.taskNotices.find((item) => item.id === target.dataset.id);
-      if (notice) notice.lifecycle = renewTaskLifecycle(notice.lifecycle, todayInShanghai());
-      showToast("已续期 30 天");
-      break;
-    }
     case "load-scenario": {
       const { result } = runLabScenario(value);
       clearMatchTimers();

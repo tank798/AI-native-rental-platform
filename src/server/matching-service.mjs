@@ -76,7 +76,8 @@ export function createMatchingService(repository, {
   clock = createClock(),
   contactEncryptionKey = null,
   onContactSecurityError = () => {},
-  mediaRepository = null
+  mediaRepository = null,
+  eventService = null
 } = {}) {
   const normalizedMarketMode = normalizeMarketMode(marketMode);
   const effectiveContactKey = contactEncryptionKey || (normalizedMarketMode === "demo" ? Buffer.alloc(32, 0x44).toString("base64") : null);
@@ -92,7 +93,8 @@ export function createMatchingService(repository, {
     database: repository,
     matchCaseRepository,
     contactService: contacts,
-    clock
+    clock,
+    eventService
   });
   const clarifications = createClarificationService({
     taskRepository,
@@ -104,14 +106,56 @@ export function createMatchingService(repository, {
     matchCaseRepository,
     contactService: contacts,
     contactGrantService: contactGrants,
-    clock
+    clock,
+    eventService
   });
   const matchCases = createMatchCaseService({
     taskRepository,
     matchCaseRepository,
     mediaRepository,
     clock,
-    onCaseEvaluated: (context) => clarifications.syncForCase(context)
+    onCaseEvaluated: (context) => {
+      clarifications.syncForCase(context);
+      if (!eventService || !context.matchCase || !context.renterTask || !context.supplyTask || context.evaluation?.status === "hard_conflict") return;
+      const { matchCase, renterTask, supplyTask } = context;
+      for (const task of [renterTask, supplyTask]) {
+        eventService.record({
+          type: "candidate.created",
+          aggregateId: task.id,
+          payload: {
+            candidateCount: 1,
+            latencyMs: Math.max(0, Date.parse(matchCase.createdAt) - Date.parse(task.createdAt))
+          },
+          dedupeKey: `candidate:${task.id}:${matchCase.id}`,
+          createdAt: matchCase.createdAt
+        });
+      }
+      if (matchCase.status === "clarifying") {
+        for (const party of ["renter", "supply"]) {
+          const questionCount = matchCaseRepository.listClarifications(matchCase.id)
+            .filter((item) => item.status === "open" && item.targetParty === party).length;
+          if (!questionCount) continue;
+          eventService.record({
+            type: "clarification.requested",
+            aggregateId: matchCase.id,
+            payload: { party, questionCount, termsVersion: Number(matchCase.currentTermsVersion || 0) },
+            dedupeKey: `clarification:${matchCase.id}:${party}:${matchCase.currentTermsVersion || 0}`
+          });
+        }
+      }
+      if (matchCase.terms && ["terms_ready", "awaiting_confirmations", "mutually_confirmed"].includes(matchCase.status)) {
+        eventService.record({
+          type: "terms.ready",
+          aggregateId: matchCase.id,
+          payload: {
+            termsVersion: matchCase.terms.version,
+            latencyMs: Math.max(0, Date.parse(matchCase.updatedAt) - Date.parse(matchCase.createdAt))
+          },
+          dedupeKey: `terms-ready:${matchCase.id}:${matchCase.terms.version}`,
+          createdAt: matchCase.updatedAt
+        });
+      }
+    }
   });
 
   function renterPool(task) {

@@ -26,10 +26,12 @@ function metric(label, value, tone = "") {
 function taskCard(task, activeTaskId) {
   const status = STATUS_LABELS[task.status] || "状态未知";
   const statusAction = task.status === "active"
-    ? `<button class="task-status-action" data-action="set-task-status" data-id="${escapeAttribute(task.id)}" data-value="paused">暂停</button>`
+    ? `<span class="task-card-actions"><button class="task-renew-action" data-action="renew-server-task" data-id="${escapeAttribute(task.id)}">续期</button><button class="task-status-action" data-action="set-task-status" data-id="${escapeAttribute(task.id)}" data-value="paused">暂停</button></span>`
     : task.status === "paused"
-      ? `<button class="task-status-action is-resume" data-action="set-task-status" data-id="${escapeAttribute(task.id)}" data-value="active">恢复</button>`
-      : `<span class="task-readonly">只读</span>`;
+      ? `<span class="task-card-actions"><button class="task-renew-action" data-action="renew-server-task" data-id="${escapeAttribute(task.id)}">续期</button><button class="task-status-action is-resume" data-action="set-task-status" data-id="${escapeAttribute(task.id)}" data-value="active">恢复</button></span>`
+      : task.status === "expired"
+        ? `<span class="task-card-actions"><span class="task-readonly">只读</span><button class="task-renew-action" data-action="clone-task" data-id="${escapeAttribute(task.id)}">复制新建</button></span>`
+        : `<span class="task-readonly">只读</span>`;
   const lastMatch = task.lastMatchAt ? `上次匹配 ${dateLabel(task.lastMatchAt)}` : "等待首次匹配";
   return `<article class="task-center-card ${task.id === activeTaskId ? "is-selected" : ""}" data-task-card="${escapeAttribute(task.id)}">
     <button class="task-card-main" data-action="open-task" data-id="${escapeAttribute(task.id)}">
