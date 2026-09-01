@@ -14,6 +14,7 @@ import { createMatchCaseService } from "./match-case-service.mjs";
 import { PAIR_EVALUATOR_VERSION } from "./pair-evaluator.mjs";
 import { createTaskRepository } from "./task-repository.mjs";
 import { normalizeMarketMode } from "./runtime-config.mjs";
+import { selectDeliveredCandidates } from "./candidate-delivery.mjs";
 
 function renterLabel(task) {
   return `租客 ${task.id.slice(0, 6)}`;
@@ -317,9 +318,12 @@ export function createMatchingService(repository, {
   function snapshot(taskId) {
     const task = repository.getTask(taskId);
     if (!task) return null;
+    const stored = repository.listCandidates(taskId).map((candidate) => candidate.payload);
     return {
       task,
-      candidates: repository.listCandidates(taskId).map((candidate) => candidate.payload),
+      // 产品承诺"每个接收方最多交付三条候选，并尽量覆盖不同选择理由"。
+      // 写入层按 pair 增量保留全部候选用于审计，收敛只在投放时进行。
+      candidates: selectDeliveredCandidates(stored, { kind: task.kind }),
       events: repository.listEvents(taskId)
     };
   }

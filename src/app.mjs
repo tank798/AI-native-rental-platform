@@ -844,10 +844,14 @@ function minuteLabel(value) {
   return Number.isFinite(minutes) ? `${minutes} 分钟` : "待确认";
 }
 
+// 键需与 src/server/candidate-delivery.mjs 的投放标签保持一致，
+// 否则徽章着色会回落到 neutral。
 const SELECTION_TONE = {
   首选: "primary",
   省预算: "thrift",
-  住得好: "comfort"
+  住得好: "comfort",
+  出价更高: "thrift",
+  租期更稳: "comfort"
 };
 
 function candidateCard(candidate, index) {
