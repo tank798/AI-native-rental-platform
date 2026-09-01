@@ -451,7 +451,7 @@ function validateDemandFields() {
   else if (mandate.budget.target < 500 || mandate.budget.hardMax < mandate.budget.target) errors.budget = "月租范围需要从低到高";
   if (!mandate.moveInWindow?.from || !mandate.moveInWindow?.to) errors.moveIn = "请填写入住日期范围";
   else if (mandate.moveInWindow.to < mandate.moveInWindow.from) errors.moveIn = "最晚入住日期不能早于最早日期";
-  if (mandate.maxCommuteMinutes < 15 || mandate.maxCommuteMinutes > 60) errors.commute = "通勤时间需在 15 到 60 分钟之间";
+  if (mandate.maxCommuteMinutes < 5 || mandate.maxCommuteMinutes > 60) errors.commute = "通勤时间需在 5 到 60 分钟之间";
   if (!mandate.leaseFlexible && ![3, 6, 12].includes(Number(mandate.leaseMonths))) errors.lease = "请选择租期";
   return errors;
 }
@@ -554,7 +554,7 @@ function coreQuestionCard(key, index) {
     },
     commute: {
       title: "最长通勤多久？",
-      body: `<div class="range-control"><output id="commute-value">${escapeText(state.answers.commute)} 分钟</output><input type="range" min="15" max="60" step="5" data-input="commute-range" value="${escapeAttribute(state.answers.commute)}" /><div><span>15</span><span>60 分钟</span></div></div>`
+      body: `<div class="range-control"><output id="commute-value">${escapeText(state.answers.commute)} 分钟</output><input type="range" min="5" max="60" step="5" data-input="commute-range" value="${escapeAttribute(state.answers.commute)}" /><div><span>5</span><span>60 分钟</span></div></div>`
     }
   };
   const control = controls[key];
@@ -603,7 +603,7 @@ function renterClarify() {
           ${field("budget", "预算", `<div class="paired-inputs"><label><span>理想</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-min" value="${escapeHtml(state.answers.budgetMin)}" placeholder="3000" /></div></label><i>—</i><label><span>最高</span><div class="money-input"><b>¥</b><input type="number" min="500" step="100" inputmode="numeric" data-input="budget-max" value="${escapeHtml(state.answers.budgetMax)}" placeholder="4000" /></div></label></div>`)}
           ${field("moveIn", "入住", `<div class="paired-inputs date-pair"><label><span>最早</span><input type="date" min="${today}" data-input="move-in-from" value="${escapeHtml(state.answers.moveInFrom)}" /></label><i>—</i><label><span>最晚</span><input type="date" min="${escapeHtml(state.answers.moveInFrom || today)}" data-input="move-in-to" value="${escapeHtml(state.answers.moveInTo)}" /></label></div>`)}
           ${field("housing", "居住", `<div class="choice-grid">${answerChip("roommate", "no_share", "整租")}${answerChip("roommate", "female", "女生合租")}${answerChip("roommate", "male", "男生合租")}${answerChip("roommate", "any", "不限")}</div>`)}
-          ${field("commute", "通勤", `<div class="range-control"><output id="commute-value">${escapeText(state.answers.commute)} 分钟</output><input type="range" min="15" max="60" step="5" data-input="commute-range" value="${escapeAttribute(state.answers.commute)}" /><div><span>15</span><span>60 分钟</span></div></div>`)}
+          ${field("commute", "通勤", `<div class="range-control"><output id="commute-value">${escapeText(state.answers.commute)} 分钟</output><input type="range" min="5" max="60" step="5" data-input="commute-range" value="${escapeAttribute(state.answers.commute)}" /><div><span>5</span><span>60 分钟</span></div></div>`)}
           ${field("lease", "租期", `<div class="choice-grid is-four">${answerChip("leaseMonths", "3", "3 个月")}${answerChip("leaseMonths", "6", "6 个月")}${answerChip("leaseMonths", "12", "1 年")}${answerChip("leaseMonths", "any", "不限")}</div>`)}
           ${field("floor", "楼层", `<div class="choice-grid is-four">${answerChip("floor", "low", "低层")}${answerChip("floor", "middle", "中层")}${answerChip("floor", "high", "高层")}${answerChip("floor", "any", "不限")}</div>`)}
           ${field("exposure", "朝向", `<div class="choice-grid is-four">${answerChip("exposure", "south", "朝南")}${answerChip("exposure", "east", "朝东")}${answerChip("exposure", "west", "朝西")}${answerChip("exposure", "any", "不限")}</div>`)}
@@ -888,7 +888,7 @@ function insightsScreen() {
   while (weekly.length < 7) weekly.unshift(0);
   const weeklyMax = Math.max(1, ...weekly);
   const weekLabels = ["六", "日", "一", "二", "三", "四", "五"];
-  return `<section class="insights-screen"><div class="subpage-nav"><button data-action="back-profile" aria-label="返回我的">${icon("back")}</button></div>
+  return `<section class="insights-screen"><div class="subpage-nav"><button data-action="back-profile" aria-label="返回我的">${icon("back")}</button><h1>匹配数据</h1></div>
     <section class="insight-hero"><span>加入天数</span><b>${stats.joinedDays}</b></section>
     <div class="metric-grid metric-grid-v2"><article><span>任务</span><b>${stats.tasksCreated}</b></article><article><span>已查看</span><b>${stats.scanned}</b></article><article><span>合适</span><b>${stats.suitable}</b></article><article><span>已确认</span><b>${stats.confirmed}</b></article></div>
     <section class="trend-card"><header><h2>近 7 天</h2><b>${weekly.reduce((sum, value) => sum + value, 0)}</b></header><div class="trend-bars" role="img" aria-label="近七天查看量：${weekly.join("、")}">${weekly.map((value, index) => `<span><i style="--bar:${Math.max(7, Math.round(value / weeklyMax * 100))}%"></i><em>${weekLabels[index]}</em></span>`).join("")}</div></section>
