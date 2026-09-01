@@ -110,13 +110,10 @@ async function main() {
     await page.waitForTimeout(1500);
     await shot("06-candidate-detail");
     // 协商记录位于详情页下半部分。滚动容器是 #app-main（.screen-scroll），
-    // 不是 window —— 用 window.scrollBy 会导致 06/07 截出同一张图。
-    await page.evaluate(() => {
-      const scroller = document.querySelector("#app-main");
-      if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    });
-    await page.waitForTimeout(800);
-    await shot("07-agent-negotiation", { selector: ".agent-dialogue-card", padding: 20 });
+    // 不是 window —— 先把完整协商卡片滚进视口，再拍一张带状态栏和标题的完整页面图。
+    await page.locator(".agent-dialogue-card").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
+    await shot("07-agent-negotiation");
     await clickIfPresent('[data-action="back-match-detail"]');
     await page.waitForTimeout(700);
   }
@@ -152,12 +149,10 @@ async function main() {
       if (scroller) scroller.scrollTop = 0;
     });
     await shot("08-supply-ai-intake");
-    await page.evaluate(() => {
-      const scroller = document.querySelector("#app-main");
-      if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    });
-    await page.waitForTimeout(800);
-    await shot("09-supply-details", { selector: ".evidence-upload-panel", padding: 18 });
+    // 材料区也拍完整可读视口，避免只剩四行材料而丢掉页面上下文。
+    await page.locator(".evidence-upload-panel").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(500);
+    await shot("09-supply-details");
 
     // 出租任务必须走完真实的上传和人工核验门槛。四份文件只使用仓库内的
     // 测试图片；审核令牌也只供本地截图服务使用。

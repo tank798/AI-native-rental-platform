@@ -4,7 +4,9 @@
 
 租客不需要先翻完房源再逐个询问，房东也不用反复回答租金、入住时间、设施和室友情况。双方分别告诉系统自己的需求和底线，系统补齐缺失信息、筛掉硬条件不合适的对象，并把结果整理到候选页。只有双方确认同一版条件后，联系方式才会解锁。
 
-<img src="./output/playwright/01-home.png" alt="住哪儿首页" width="320" height="587">
+<p align="center">
+  <img src="./output/playwright/01-home.png" alt="住哪儿首页" width="320" height="587">
+</p>
 
 ## 这个项目想解决什么
 
@@ -33,45 +35,93 @@ flowchart LR
 
 ## 操作界面
 
-下面的图片由仓库中的 `scripts/capture-showcase.mjs` 从当前代码自动生成。为了在 GitHub 上阅读更轻松，页面图使用紧凑视口，详情和材料页只截取重点区域；README 中统一控制了展示尺寸，点击图片仍可查看原图。截图使用 `MARKET_MODE=demo` 和虚构数据，不包含真实证件、联系方式、Cookie、API Key 或本机路径。演示候选不会生成真实的联系人授权。
+下面的图片由仓库中的 `scripts/capture-showcase.mjs` 从当前代码自动生成。截图统一使用紧凑视口；协商记录和发布材料保留状态栏、页面标题以及完整内容区，不再只截取局部卡片。README 中的双列图片使用等宽列并居中展示，单列图片也统一居中；点击图片可以查看原图。截图使用 `MARKET_MODE=demo` 和虚构数据，不包含真实证件、联系方式、Cookie、API Key 或本机路径。演示候选不会生成真实的联系人授权。
 
 ### 租客端
 
 先用一句话说明大致需求，再检查系统整理出的字段。预算、入住时间和其他条件都可以在发布前修改。
 
-| 整理找房需求 | 确认任务条件 |
-|:---:|:---:|
-| <img src="./output/playwright/02-renter-ai-intake.png" alt="整理找房需求" width="300" height="551"> | <img src="./output/playwright/03-renter-task-review.png" alt="确认找房任务" width="300" height="551"> |
+<table width="100%">
+  <thead>
+    <tr>
+      <th align="center">整理找房需求</th>
+      <th align="center">确认任务条件</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td width="50%" align="center"><img src="./output/playwright/02-renter-ai-intake.png" alt="整理找房需求" width="300" height="551"></td>
+      <td width="50%" align="center"><img src="./output/playwright/03-renter-task-review.png" alt="确认找房任务" width="300" height="551"></td>
+    </tr>
+  </tbody>
+</table>
 
 任务发布后会继续等待新房源。候选页展示当前筛选结果，并保留任务仍在运行的状态。
 
-| 持续匹配 | 候选房源 |
-|:---:|:---:|
-| <img src="./output/playwright/04-continuous-matching.png" alt="持续匹配状态" width="300" height="441"> | <img src="./output/playwright/05-renter-results.png" alt="候选房源结果" width="300" height="441"> |
+<table width="100%">
+  <thead>
+    <tr>
+      <th align="center">持续匹配</th>
+      <th align="center">候选房源</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td width="50%" align="center"><img src="./output/playwright/04-continuous-matching.png" alt="持续匹配状态" width="300" height="441"></td>
+      <td width="50%" align="center"><img src="./output/playwright/05-renter-results.png" alt="候选房源结果" width="300" height="441"></td>
+    </tr>
+  </tbody>
+</table>
 
 详情页会说明入选原因、需要留意的条件、资料来源和当前意向租金。协商记录只展示可以对双方公开的内容。
 
-| 候选详情 | 条件协商记录 |
-|:---:|:---:|
-| <img src="./output/playwright/06-candidate-detail.png" alt="候选详情" width="300" height="551"> | <img src="./output/playwright/07-agent-negotiation.png" alt="条件协商记录" width="300" height="312"> |
+<table width="100%">
+  <thead>
+    <tr>
+      <th align="center">候选详情</th>
+      <th align="center">条件协商记录</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td width="50%" align="center"><img src="./output/playwright/06-candidate-detail.png" alt="候选详情" width="300" height="551"></td>
+      <td width="50%" align="center"><img src="./output/playwright/07-agent-negotiation.png" alt="条件协商记录" width="300" height="551"></td>
+    </tr>
+  </tbody>
+</table>
 
 ### 出租端
 
 发布者可以选择“房东本人”或“当前租客”，然后补充位置、租金、入住时间、租期、楼层、室友和设施。最低可接受租金属于私密字段，不会直接出现在另一方的结果里。
 
-| 整理房源信息 | 确认房间和设施 |
-|:---:|:---:|
-| <img src="./output/playwright/08-supply-ai-intake.png" alt="整理房源信息" width="300" height="551"> | <img src="./output/playwright/09-supply-details.png" alt="确认房间和设施" width="300" height="267"> |
+<table width="100%">
+  <thead>
+    <tr>
+      <th align="center">整理房源信息</th>
+      <th align="center">确认房间和设施</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td width="50%" align="center"><img src="./output/playwright/08-supply-ai-intake.png" alt="整理房源信息" width="300" height="551"></td>
+      <td width="50%" align="center"><img src="./output/playwright/09-supply-details.png" alt="确认房间和设施" width="300" height="551"></td>
+    </tr>
+  </tbody>
+</table>
 
 出租任务发布后也会反向匹配现有租客。对房东展示的是匿名租客信息、入住时间、租期和可以公开的意向价格，不展示租客预算上限。
 
-<img src="./output/playwright/11-supply-tenant-results.png" alt="出租端候选租客" width="320" height="470">
+<p align="center">
+  <img src="./output/playwright/11-supply-tenant-results.png" alt="出租端候选租客" width="320" height="470">
+</p>
 
 ### 任务数据
 
 任务数量、候选变化、确认进度和处理耗时来自服务端事件，不由前端估算。
 
-<img src="./output/playwright/12-neutral-insights.png" alt="任务数据页面" width="320" height="587">
+<p align="center">
+  <img src="./output/playwright/12-neutral-insights.png" alt="任务数据页面" width="320" height="587">
+</p>
 
 ## 已经实现的流程
 
