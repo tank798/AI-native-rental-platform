@@ -1443,9 +1443,7 @@ button {
 }
 
 .bear-agent-stage,
-.bear-agent-render,
-.bear-agent-rig,
-.bear-agent-rig svg {
+.bear-rig {
   width: 100%;
   height: 100%;
 }
@@ -1460,49 +1458,52 @@ button {
   will-change: transform;
 }
 
-.bear-agent-render {
-  display: block;
-  object-fit: contain;
-  object-position: center;
+/* ---- 分层骨架 ---- */
+.bear-rig {
+  position: absolute;
+  inset: 0;
+  /* 呼吸放在整个骨架上：非等比缩放（吸气略微变宽变高）比等比更像活物 */
   transform-origin: 50% 92%;
-  /* 呼吸用非等比缩放（吸气时略微变宽变高），比等比缩放更像活物。 */
   animation: bear-breathe 4.1s ease-in-out infinite;
   will-change: transform;
 }
 
-.bear-agent-rig {
+.bear-layer {
   position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0;
-}
-
-.bear-agent-rig svg {
   display: block;
-  overflow: visible;
+  pointer-events: none;
+  /* 每层按百分比定位，随容器等比缩放；尺寸由内联 style 给出 */
 }
 
-.bear-agent-rig svg g {
-  transform-box: fill-box;
-  transform-origin: center;
+/* 头部绕底边中心（约等于颈部）转动，而不是绕自身几何中心，
+   否则歪头会变成"整个头平移"。 */
+.bear-layer[data-part="head"] {
+  transform-origin: 50% 100%;
+  animation: bear-head-sway 6.2s ease-in-out infinite;
 }
 
-.bear-agent:not(.is-launching) #head,
-.bear-agent:not(.is-launching) #hat {
-  animation: bear-head-breathe 3.4s ease-in-out infinite;
+/* 帽子跟随头部但周期略长、幅度略大：这就是动画里的"次级动作"，
+   让它有被甩动的重量感，而不是和头钉死在一起。 */
+.bear-layer[data-part="hat"] {
+  transform-origin: 50% 96%;
+  animation: bear-hat-sway 6.2s ease-in-out infinite;
+  animation-delay: .12s;
 }
 
-.bear-agent:not(.is-launching) #leftArm {
-  animation: bear-arm-left 3.4s ease-in-out infinite;
+/* 手臂绕肩部（各层顶边中心）摆动；左右反向且周期不同，避免同步显得机械。 */
+.bear-layer[data-part="arm-left"] {
+  transform-origin: 50% 6%;
+  animation: bear-arm-swing-left 5.3s ease-in-out infinite;
 }
 
-.bear-agent:not(.is-launching) #rightArm {
-  animation: bear-arm-right 3.4s ease-in-out infinite;
+.bear-layer[data-part="arm-right"] {
+  transform-origin: 50% 6%;
+  animation: bear-arm-swing-right 5.9s ease-in-out infinite;
 }
 
-.bear-agent:not(.is-launching) #leftEye,
-.bear-agent:not(.is-launching) #rightEye {
-  animation: bear-blink 4.8s ease-in-out infinite;
+/* 闭眼层默认隐藏，由脚本在不规则间隔触发（固定周期会显得机械）。 */
+.bear-layer[data-part="eyes-closed"] {
+  opacity: 0;
 }
 
 .bear-agent.is-hovered .bear-agent-stage {
@@ -1511,13 +1512,18 @@ button {
   transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
 }
 
-.bear-agent.is-hovered #leftEyebrow,
-.bear-agent.is-hovered #rightEyebrow {
-  transform: translateY(-2px);
+.bear-agent.is-hovered .bear-layer[data-part="head"] {
+  animation-play-state: paused;
+  transform: rotate(0deg) translateY(-2px) scale(1.015);
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
 }
 
+.bear-agent.is-hovered .bear-layer[data-part="arm-left"] { animation-play-state: paused; transform: rotate(-13deg); transition: transform 240ms ease-out; }
+.bear-agent.is-hovered .bear-layer[data-part="arm-right"] { animation-play-state: paused; transform: rotate(13deg); transition: transform 240ms ease-out; }
+
 .bear-agent.is-launching .bear-agent-stage,
-.bear-agent.is-launching .bear-agent-rig svg g {
+.bear-agent.is-launching .bear-rig,
+.bear-agent.is-launching .bear-layer {
   animation: none;
 }
 
@@ -1582,6 +1588,34 @@ button {
   0%   { transform: translateY(0) scale(1, 1); }
   40%  { transform: translateY(-2.5px) scale(1.014, 1.022); }
   100% { transform: translateY(0) scale(1, 1); }
+}
+
+/* 头部左右轻摆 + 微小上下，幅度刻意很小：拟人动作过大就变成卡通抽搐。 */
+@keyframes bear-head-sway {
+  0%   { transform: rotate(0deg) translateY(0); }
+  26%  { transform: rotate(1.5deg) translateY(-1px); }
+  52%  { transform: rotate(0deg) translateY(0); }
+  76%  { transform: rotate(-1.5deg) translateY(-1px); }
+  100% { transform: rotate(0deg) translateY(0); }
+}
+
+/* 帽子：与头同相但幅度更大、回位更慢，形成跟随迟滞。 */
+@keyframes bear-hat-sway {
+  0%   { transform: rotate(0deg) translate(0, 0); }
+  26%  { transform: rotate(2.6deg) translate(1px, -1px); }
+  52%  { transform: rotate(0deg) translate(0, 0); }
+  76%  { transform: rotate(-2.6deg) translate(-1px, -1px); }
+  100% { transform: rotate(0deg) translate(0, 0); }
+}
+
+@keyframes bear-arm-swing-left {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(-5.5deg); }
+}
+
+@keyframes bear-arm-swing-right {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(5.5deg); }
 }
 
 /* 重心转移：极小幅度的左右倾斜 + 位移，让静止状态不"钉"在原地。 */
@@ -3117,14 +3151,16 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .bear-agent-stage,
-  .bear-agent-rig svg g,
+  .bear-rig,
+  .bear-layer,
   .search-node {
     animation: none !important;
   }
 }
 
 body[data-motion="reduced"] .bear-agent-stage,
-body[data-motion="reduced"] .bear-agent-rig svg g,
+body[data-motion="reduced"] .bear-rig,
+body[data-motion="reduced"] .bear-layer,
 body[data-motion="reduced"] .search-node {
   animation: none !important;
 }
@@ -3271,10 +3307,6 @@ select:focus-visible {
 
 .home-agent-card .bear-agent {
   margin-top: 28px;
-}
-
-.home-agent-card .bear-agent-render {
-  background: transparent;
 }
 
 .agent-whisper {
@@ -5158,8 +5190,8 @@ body {
    只保留状态切换的必要过渡。 */
 @media (prefers-reduced-motion: reduce) {
   .bear-agent-stage,
-  .bear-agent-render,
-  .bear-agent-rig svg g {
+  .bear-rig,
+  .bear-layer {
     animation: none !important;
   }
 }
