@@ -71,6 +71,31 @@ async function main() {
     }
   };
 
+  const alignSectionStart = async (selector, { stickySelector = null, gap = 0, bottomReserve = 0 } = {}) => {
+    const target = page.locator(selector).first();
+    await target.waitFor({ state: "visible", timeout: 10_000 });
+    const alignment = await target.evaluate((element, options) => {
+      const scroller = document.querySelector("#app-main");
+      if (!scroller) return { offset: 0 };
+      if (options.bottomReserve) {
+        const screen = element.closest(".flow-screen");
+        if (screen) screen.style.paddingBottom = `${options.bottomReserve}px`;
+      }
+      scroller.style.scrollBehavior = "auto";
+      const sticky = options.stickySelector ? scroller.querySelector(options.stickySelector) : null;
+      const stickyHeight = sticky?.getBoundingClientRect().height || 0;
+      const scrollerTop = scroller.getBoundingClientRect().top;
+      const targetTop = element.getBoundingClientRect().top;
+      scroller.scrollTop += targetTop - scrollerTop - stickyHeight - options.gap;
+      const actualTop = element.getBoundingClientRect().top;
+      const desiredTop = scroller.getBoundingClientRect().top + stickyHeight + options.gap;
+      return { offset: actualTop - desiredTop };
+    }, { stickySelector, gap, bottomReserve });
+    if (Math.abs(alignment.offset) > 2) {
+      throw new Error(`${selector} 截图起点偏移 ${Math.round(alignment.offset)}px`);
+    }
+  };
+
   console.log("生成展示截图：");
   await page.goto(BASE, { waitUntil: "networkidle" });
   await page.waitForTimeout(600);
@@ -109,9 +134,9 @@ async function main() {
   if (await clickIfPresent('[data-action="open-candidate"]')) {
     await page.waitForTimeout(1500);
     await shot("06-candidate-detail");
-    // 协商记录位于详情页下半部分。滚动容器是 #app-main（.screen-scroll），
-    // 不是 window —— 先把完整协商卡片滚进视口，再拍一张带状态栏和标题的完整页面图。
-    await page.locator(".agent-dialogue-card").scrollIntoViewIfNeeded();
+    // 协商记录位于详情页下半部分。把卡片标题精确贴到滚动区起点，
+    // 避免截图顶部残留上一张“资料来源”卡片的半截内容。
+    await alignSectionStart(".agent-dialogue-card");
     await page.waitForTimeout(500);
     await shot("07-agent-negotiation");
     await clickIfPresent('[data-action="back-match-detail"]');
@@ -144,13 +169,17 @@ async function main() {
     await page.locator('[data-input="supply-address"]').fill("上海市静安区南阳路 100 号");
     await page.locator('[data-input="supply-lease"]').selectOption("3");
     await page.waitForTimeout(900);
-    await page.evaluate(() => {
-      const scroller = document.querySelector("#app-main");
-      if (scroller) scroller.scrollTop = 0;
-    });
+    // 字段更新会触发重渲染并保留旧滚动位置。把对话容器重新贴到吸顶栏下方，
+    // 否则首条房源描述可能在滚动动画尚未结束时被标题栏盖住。
+    await alignSectionStart(".supply-chat", { stickySelector: ".flow-header" });
     await shot("08-supply-ai-intake");
-    // 材料区也拍完整可读视口，避免只剩四行材料而丢掉页面上下文。
-    await page.locator(".evidence-upload-panel").scrollIntoViewIfNeeded();
+    // 材料区从标题完整开始，并为吸顶流程栏留出空间；否则上一段照片
+    // 与授权勾选会以半截状态留在截图顶部，看起来像界面被裁坏。
+    await alignSectionStart(".evidence-upload-panel", {
+      stickySelector: ".flow-header",
+      gap: 8,
+      bottomReserve: 520
+    });
     await page.waitForTimeout(500);
     await shot("09-supply-details");
 
