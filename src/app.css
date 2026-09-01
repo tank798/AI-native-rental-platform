@@ -889,7 +889,6 @@ button { cursor: pointer; }
   width: 36px;
   height: 41px;
   object-fit: contain;
-  filter: drop-shadow(0 5px 8px rgba(28, 30, 34, .08));
 }
 
 .chat-bubble {
@@ -925,13 +924,18 @@ button { cursor: pointer; }
   margin-top: 10px;
 }
 
+/* flex-wrap 默认按内容宽度排列，每行右缘参差不齐。
+   让胶囊在行内等比伸展，使每行都填满整宽、右缘对齐。 */
 .chat-tags span {
-  padding: 5px 8px;
+  flex: 1 1 auto;
+  min-width: max-content;
+  padding: 5px 10px;
   border-radius: 8px;
   background: #f0f0f2;
   color: #303137;
   font-size: 11px;
   font-weight: 620;
+  text-align: center;
 }
 
 .intake-source {
@@ -1427,16 +1431,22 @@ button {
 
 .bear-agent-stage {
   position: relative;
-  transform-origin: 50% 82%;
-  animation: bear-idle-float 3.4s ease-in-out infinite;
-  will-change: transform, opacity;
+  /* 支点放在脚底附近：身体的缩放与摆动都应绕着接触地面的点发生，
+     否则会出现"整体平移"的漂浮感。 */
+  transform-origin: 50% 92%;
+  /* 重心左右转移。周期与呼吸/浮动刻意取质数比，避免三者同频形成机械感。 */
+  animation: bear-weight-shift 7.3s ease-in-out infinite;
+  will-change: transform;
 }
 
 .bear-agent-render {
   display: block;
   object-fit: contain;
   object-position: center;
-  filter: drop-shadow(0 12px 18px rgba(56, 91, 126, .12));
+  transform-origin: 50% 92%;
+  /* 呼吸用非等比缩放（吸气时略微变宽变高），比等比缩放更像活物。 */
+  animation: bear-breathe 4.1s ease-in-out infinite;
+  will-change: transform;
 }
 
 .bear-agent-rig {
@@ -1544,6 +1554,22 @@ button {
 @keyframes bear-idle-float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-4px); }
+}
+
+/* 呼吸：非等比缩放 + 轻微上浮。吸气快、呼气慢（40/60），符合真实呼吸节奏。 */
+@keyframes bear-breathe {
+  0%   { transform: translateY(0) scale(1, 1); }
+  40%  { transform: translateY(-2.5px) scale(1.014, 1.022); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+
+/* 重心转移：极小幅度的左右倾斜 + 位移，让静止状态不"钉"在原地。 */
+@keyframes bear-weight-shift {
+  0%   { transform: translateX(0) rotate(0deg); }
+  27%  { transform: translateX(1.6px) rotate(.7deg); }
+  53%  { transform: translateX(0) rotate(0deg); }
+  79%  { transform: translateX(-1.6px) rotate(-.7deg); }
+  100% { transform: translateX(0) rotate(0deg); }
 }
 
 @keyframes bear-head-breathe {
@@ -3239,11 +3265,6 @@ select:focus-visible {
 
 .home-agent-card .bear-agent-render {
   background: transparent;
-}
-
-.bear-alpha-filter {
-  position: absolute;
-  pointer-events: none;
 }
 
 .agent-whisper {
@@ -5095,5 +5116,15 @@ body {
 
   .home-supply-entry {
     margin-top: 5px;
+  }
+}
+
+/* 无障碍：系统开启「减少动态效果」时停掉小熊的持续动画，
+   只保留状态切换的必要过渡。 */
+@media (prefers-reduced-motion: reduce) {
+  .bear-agent-stage,
+  .bear-agent-render,
+  .bear-agent-rig svg g {
+    animation: none !important;
   }
 }

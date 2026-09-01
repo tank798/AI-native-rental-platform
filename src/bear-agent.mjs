@@ -1,4 +1,4 @@
-const bearVisualUrl = new URL("../assets/bear-agent-anchor.png", import.meta.url);
+const bearVisualUrl = new URL("../assets/bear-agent-hero.webp", import.meta.url);
 const bearRigUrl = new URL("../assets/bear-agent.svg", import.meta.url);
 
 let bearSvgPromise;
@@ -26,15 +26,8 @@ function animatePart(element, keyframes, options) {
 export function bearAgentMarkup({ id, mode = "idle", label = "AI 小熊分身", compact = false } = {}) {
   const safeId = id || `bear-${Math.random().toString(36).slice(2)}`;
   return `<div class="bear-agent ${compact ? "is-compact" : ""}" data-bear-agent data-bear-id="${safeId}" data-mode="${mode}" role="img" aria-label="${label}">
-    <svg class="bear-alpha-filter" width="0" height="0" aria-hidden="true" focusable="false">
-      <filter id="${safeId}-alpha-clean" x="-18%" y="-18%" width="136%" height="136%" color-interpolation-filters="sRGB">
-        <feComponentTransfer>
-          <feFuncA type="linear" slope="1.3" intercept="-0.16" />
-        </feComponentTransfer>
-      </filter>
-    </svg>
     <div class="bear-agent-stage">
-      <img class="bear-agent-render" src="${bearVisualUrl.href}" width="1190" height="1322" alt="" aria-hidden="true" style="filter:url(#${safeId}-alpha-clean) drop-shadow(0 11px 15px rgba(17,17,20,.075))" />
+      <img class="bear-agent-render" src="${bearVisualUrl.href}" width="443" height="620" alt="" aria-hidden="true" decoding="async" />
       <div class="bear-agent-rig" data-bear-svg aria-hidden="true"></div>
       <span class="bear-motion-trail" aria-hidden="true"></span>
     </div>
