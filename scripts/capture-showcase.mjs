@@ -21,23 +21,42 @@ const ADMIN_REVIEW_TOKEN = process.env.SHOWCASE_ADMIN_REVIEW_TOKEN || "readme-sh
 const EVIDENCE_FIXTURE = path.resolve("assets/room-sunlit.jpg");
 
 const RENTER_TEXT = "静安寺附近，预算 3000 到 3500，9 月 3 日入住，女生合租，租 12 个月，通勤 35 分钟，需要厨房和洗衣机";
-const SUPPLY_TEXT = "当前租客个人转租，完整地址上海市静安区南阳路 100 号，静安寺站，月租 3200 元，最低 3000 元，9 月 3 日入住，至少租 12 个月，15 平，9/18 层，2 位女生室友，有洗衣机和电梯，朝南，无中介费无服务费";
+const SUPPLY_TEXT = "当前租客个人转租，静安寺站，月租3200元，最低3000元，9月3日入住，至少租3个月，整租，15平，9/18层，有厨房、洗衣机和电梯，朝南，0中介费0服务费";
 
 async function main() {
   const { chromium } = await import("playwright");
+  const sharp = (await import("sharp")).default;
   await fs.mkdir(OUT, { recursive: true });
 
   const browser = await chromium.launch({
     ...(EXECUTABLE ? { executablePath: EXECUTABLE } : {}),
     args: ["--no-sandbox", "--disable-dev-shm-usage"]
   });
-  const context = await browser.newContext({ viewport: { width: 414, height: 896 }, deviceScaleFactor: 2 });
+  // README 使用紧凑的移动视口，避免把整张长页面原样塞进仓库首页。
+  // 需要完整页面时仍可直接用 Playwright 测试或浏览器手工查看。
+  const context = await browser.newContext({ viewport: { width: 414, height: 760 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
 
-  const shot = async (name) => {
+  const shot = async (name, { selector, padding = 0 } = {}) => {
     // 冻结动画，保证同一界面每次产出一致的图，便于 diff 审阅
     await page.addStyleTag({ content: "*,*::before,*::after{animation:none !important;transition:none !important}" });
-    await page.screenshot({ path: path.join(OUT, `${name}.png`) });
+    if (selector) {
+      const target = page.locator(selector).first();
+      await target.waitFor({ state: "visible", timeout: 10_000 });
+      if (padding) {
+        // locator.screenshot 能完整捕获滚动容器内的元素，但会把父级留白裁掉。
+        // 先捕获真实元素，再在图片边缘补回留白，避免改变页面布局或裁掉滚动内容。
+        const buffer = await target.screenshot();
+        await sharp(buffer)
+          .extend({ top: padding, bottom: padding, left: padding, right: padding, background: "#fff" })
+          .png()
+          .toFile(path.join(OUT, `${name}.png`));
+      } else {
+        await target.screenshot({ path: path.join(OUT, `${name}.png`) });
+      }
+    } else {
+      await page.screenshot({ path: path.join(OUT, `${name}.png`) });
+    }
     process.stdout.write(`  ${name}\n`);
   };
 
@@ -82,10 +101,10 @@ async function main() {
     .waitFor({ state: "visible", timeout: 30_000 });
   await page.locator('[data-action="switch-tab"][data-value="match"]').click();
   await page.locator(".agent-status").filter({ hasText: "仍在持续找房" }).waitFor({ state: "visible", timeout: 10_000 });
-  await shot("04-continuous-matching");
+  await shot("04-continuous-matching", { selector: ".match-home" });
   await page.locator('[data-action="switch-tab"][data-value="results"]').click();
   await page.waitForTimeout(800);
-  await shot("05-renter-results");
+  await shot("05-renter-results", { selector: ".results-screen" });
 
   if (await clickIfPresent('[data-action="open-candidate"]')) {
     await page.waitForTimeout(1500);
@@ -97,7 +116,7 @@ async function main() {
       if (scroller) scroller.scrollTop = scroller.scrollHeight;
     });
     await page.waitForTimeout(800);
-    await shot("07-agent-negotiation");
+    await shot("07-agent-negotiation", { selector: ".agent-dialogue-card", padding: 20 });
     await clickIfPresent('[data-action="back-match-detail"]');
     await page.waitForTimeout(700);
   }
@@ -126,15 +145,19 @@ async function main() {
     // 地址与租期是发布硬条件。模型若没有稳定抽出，截图脚本显式补齐，
     // 避免把模型解析波动误当成界面流程成功。
     await page.locator('[data-input="supply-address"]').fill("上海市静安区南阳路 100 号");
-    await page.locator('[data-input="supply-lease"]').selectOption("12");
+    await page.locator('[data-input="supply-lease"]').selectOption("3");
     await page.waitForTimeout(900);
+    await page.evaluate(() => {
+      const scroller = document.querySelector("#app-main");
+      if (scroller) scroller.scrollTop = 0;
+    });
     await shot("08-supply-ai-intake");
     await page.evaluate(() => {
       const scroller = document.querySelector("#app-main");
       if (scroller) scroller.scrollTop = scroller.scrollHeight;
     });
     await page.waitForTimeout(800);
-    await shot("09-supply-details");
+    await shot("09-supply-details", { selector: ".evidence-upload-panel", padding: 18 });
 
     // 出租任务必须走完真实的上传和人工核验门槛。四份文件只使用仓库内的
     // 测试图片；审核令牌也只供本地截图服务使用。
@@ -167,7 +190,7 @@ async function main() {
     await page.locator('[data-action="publish-supply"]').click();
     await page.locator(".tenant-card").first().waitFor({ state: "visible", timeout: 30_000 });
     await page.waitForTimeout(800);
-    await shot("11-supply-tenant-results");
+    await shot("11-supply-tenant-results", { selector: ".results-screen" });
   }
 
   await page.goto(BASE, { waitUntil: "networkidle" });
