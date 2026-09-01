@@ -16,18 +16,46 @@ export function assertJsonContentType(request) {
  * JSON writes protected by this guard.
  */
 export function assertSameOrigin(request) {
-  const origin = String(request.headers?.origin || "").trim();
-  if (!origin) return;
   const host = String(request.headers?.host || "").trim().toLowerCase();
-  let originHost;
-  try {
-    originHost = new URL(origin).host.toLowerCase();
-  } catch {
-    throw httpError(403, "ORIGIN_MISMATCH", "请求来源无效");
-  }
-  if (!host || originHost !== host) {
+  const origin = String(request.headers?.origin || "").trim();
+
+  // Sec-Fetch-Site 由浏览器强制添加且不可被脚本伪造，优先采信。
+  const fetchSite = String(request.headers?.["sec-fetch-site"] || "").trim().toLowerCase();
+  if (fetchSite) {
+    if (fetchSite === "same-origin" || fetchSite === "none") return;
     throw httpError(403, "ORIGIN_MISMATCH", "请求来源与当前站点不一致");
   }
+
+  if (origin) {
+    let originHost;
+    try {
+      originHost = new URL(origin).host.toLowerCase();
+    } catch {
+      throw httpError(403, "ORIGIN_MISMATCH", "请求来源无效");
+    }
+    if (!host || originHost !== host) {
+      throw httpError(403, "ORIGIN_MISMATCH", "请求来源与当前站点不一致");
+    }
+    return;
+  }
+
+  // 既无 Sec-Fetch-Site 也无 Origin 时回退校验 Referer。
+  // 旧实现在这里直接 return，导致只要不带 Origin 就能绕过全部同源校验。
+  const referer = String(request.headers?.referer || "").trim();
+  if (referer) {
+    let refererHost;
+    try {
+      refererHost = new URL(referer).host.toLowerCase();
+    } catch {
+      throw httpError(403, "ORIGIN_MISMATCH", "请求来源无效");
+    }
+    if (!host || refererHost !== host) {
+      throw httpError(403, "ORIGIN_MISMATCH", "请求来源与当前站点不一致");
+    }
+    return;
+  }
+
+  throw httpError(403, "ORIGIN_REQUIRED", "写操作必须携带可校验的同源来源信息");
 }
 
 /** Reads and parses a JSON stream while enforcing the route-specific byte cap. */

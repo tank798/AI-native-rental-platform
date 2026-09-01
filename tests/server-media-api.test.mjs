@@ -14,6 +14,7 @@ async function jsonRequest(baseUrl, route, { cookie, method = "GET", body } = {}
     method,
     headers: {
       "Content-Type": "application/json",
+      Origin: baseUrl,
       ...(cookie ? { Cookie: cookie } : {})
     },
     body: body === undefined ? undefined : JSON.stringify(body)
@@ -91,7 +92,7 @@ test("公开媒体 API 只返回净化 derivative，候选可读、第三方与�
 
   const oversizedResponse = await fetch(`${baseUrl}/api/tasks/media-supply-task/media`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Cookie: supply.cookie },
+    headers: { "Content-Type": "application/json", Origin: baseUrl, Cookie: supply.cookie },
     body: JSON.stringify({
       mimeType: "image/jpeg",
       data: "A".repeat(12 * 1024 * 1024),

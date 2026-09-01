@@ -39,5 +39,38 @@ test("浏览器修改请求的 Origin 必须与当前 Host 一致", () => {
     () => assertSameOrigin({ headers: { origin: "https://evil.example", host: "rental.example", "x-forwarded-proto": "https" } }),
     (error) => error.status === 403 && error.code === "ORIGIN_MISMATCH"
   );
-  assert.doesNotThrow(() => assertSameOrigin({ headers: { host: "127.0.0.1:4173" } }));
+  // 旧行为：缺少 Origin 头直接放行，导致只要不带 Origin 就能绕过全部同源校验。
+  // 真实浏览器对所有非 GET 请求必定携带 Origin，因此该豁免只会放行伪造请求。
+  assert.throws(
+    () => assertSameOrigin({ headers: { host: "127.0.0.1:4173" } }),
+    (error) => error.status === 403 && error.code === "ORIGIN_REQUIRED"
+  );
+});
+
+test("Sec-Fetch-Site 优先于 Origin，跳站写操作被拦住", () => {
+  // 浏览器强制添加且脚本不可伪造
+  assert.doesNotThrow(() => assertSameOrigin({
+    headers: { "sec-fetch-site": "same-origin", host: "rental.example" }
+  }));
+  // 地址栗直接输入、书签等场景
+  assert.doesNotThrow(() => assertSameOrigin({
+    headers: { "sec-fetch-site": "none", host: "rental.example" }
+  }));
+  for (const site of ["cross-site", "same-site"]) {
+    assert.throws(
+      () => assertSameOrigin({ headers: { "sec-fetch-site": site, host: "rental.example" } }),
+      (error) => error.status === 403 && error.code === "ORIGIN_MISMATCH",
+      site
+    );
+  }
+});
+
+test("无 Origin 时回退校验 Referer", () => {
+  assert.doesNotThrow(() => assertSameOrigin({
+    headers: { referer: "https://rental.example/tasks", host: "rental.example" }
+  }));
+  assert.throws(
+    () => assertSameOrigin({ headers: { referer: "https://evil.example/x", host: "rental.example" } }),
+    (error) => error.status === 403 && error.code === "ORIGIN_MISMATCH"
+  );
 });

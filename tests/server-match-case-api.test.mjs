@@ -12,7 +12,8 @@ import { testContactEncryptionKey } from "./test-secrets.mjs";
 async function request(baseUrl, route, { cookie, method = "GET", body } = {}) {
   const response = await fetch(`${baseUrl}${route}`, {
     method,
-    headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    // 真实浏览器对所有非 GET 请求必定携带 Origin，这里如实模拟。
+    headers: { "Content-Type": "application/json", Origin: baseUrl, ...(cookie ? { Cookie: cookie } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   return { response, payload: await response.json() };

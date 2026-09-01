@@ -78,7 +78,7 @@ async function startTestApp(t, { policy }) {
 async function createSession(baseUrl) {
   const response = await fetch(`${baseUrl}/api/session`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
     body: "{}"
   });
   assert.equal(response.status, 201);
@@ -89,7 +89,7 @@ async function createSession(baseUrl) {
   };
 }
 
-function intake(baseUrl, cookie, origin = null) {
+function intake(baseUrl, cookie, origin = baseUrl) {
   return fetch(`${baseUrl}/api/intake/renter`, {
     method: "POST",
     headers: {
@@ -143,7 +143,7 @@ test("超大请求与不同源 Cookie 请求在调用 provider 前被拒绝", as
   const session = await createSession(started.baseUrl);
   const tooLarge = await fetch(`${started.baseUrl}/api/intake/renter`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Cookie: session.cookie },
+    headers: { "Content-Type": "application/json", Origin: started.baseUrl, Cookie: session.cookie },
     body: JSON.stringify({ text: "房".repeat(70_000), referenceDate: "2026-08-30" })
   });
   assert.equal(tooLarge.status, 413);
