@@ -608,14 +608,40 @@ button { cursor: pointer; }
 .candidate-photo > .candidate-label { position: absolute; z-index: 2; top: 12px; padding: 7px 9px; border-radius: 9px; background: rgba(255,255,255,.92); backdrop-filter: blur(10px); font-size: 11px; }
 .candidate-photo > .candidate-index { left: 12px; font-family: var(--font-display); font-weight: 900; }
 .candidate-photo > .candidate-label { right: 12px; background: rgba(17,17,20,.86); color: white; }
+
 .candidate-copy { padding: 15px; }
 .candidate-copy > div:first-child { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
 .candidate-copy h2 { margin: 0; font-size: 18px; letter-spacing: -.03em; }
 .candidate-copy strong { white-space: nowrap; font-size: 18px; }
 .candidate-copy small { font-size: 11px; }
 .candidate-copy > p { margin: 8px 0 12px; color: var(--ink-2); font-size: 13px; font-weight: 650; }
+/* 匹配理由：产品的核心价值，放在价格与标签之间的视觉重心上 */
+.candidate-reasons { margin: 0 0 12px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.candidate-reasons li { position: relative; padding-left: 16px; color: var(--ink-2); font-size: 12px; font-weight: 650; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.candidate-reasons li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--blue), transparent 25%);
+}
+
 .candidate-tags { display: flex; gap: 6px; overflow: hidden; }
 .candidate-tags span { flex: 0 0 auto; max-width: 46%; padding: 6px 8px; border-radius: 8px; background: var(--soft); font-size: 11px; font-weight: 750; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 事实 / 风险 / 无冲突 三类标签必须可区分，否则风险提示会被埋掉 */
+.candidate-tags .tag-fact { background: var(--soft); color: var(--ink-2); }
+.candidate-tags .tag-caveat {
+  background: color-mix(in srgb, var(--danger), white 90%);
+  color: color-mix(in srgb, var(--danger), black 12%);
+}
+.candidate-tags .tag-clear {
+  background: color-mix(in srgb, var(--mint), white 78%);
+  color: #0a6b4a;
+}
 
 .tenant-card { margin-bottom: 11px; }
 .tenant-card > button { width: 100%; min-height: 116px; padding: 15px; border: 1px solid var(--line); border-radius: 20px; background: white; display: grid; grid-template-columns: 48px 1fr 22px; gap: 12px; align-items: center; text-align: left; }
@@ -1774,7 +1800,7 @@ button {
 
 .parsed-strip span,
 .choice-chip,
-.candidate-tags span,
+.candidate-tags .tag-fact,
 .detail-facts span {
   background: #f0f6fc;
 }
@@ -3498,6 +3524,27 @@ select:focus-visible {
 .tenant-main > div b {
   background: #f0f0f2;
 }
+
+/* 三种入选理由：沿用中性浅底胶囊，仅用低饱和色调区分，确保文字始终为深色可读。
+   注意 [data-tone] 属性选择器特异性高于上方中性规则，因此必须同时显式声明
+   background 与 color，否则会出现深底深字。 */
+.candidate-photo > .candidate-label[data-tone="primary"] {
+  background: rgba(226, 232, 245, .95);
+  color: #223a5e;
+}
+.candidate-photo > .candidate-label[data-tone="thrift"] {
+  background: rgba(222, 240, 232, .95);
+  color: #1c5942;
+}
+.candidate-photo > .candidate-label[data-tone="comfort"] {
+  background: rgba(244, 234, 222, .95);
+  color: #6b482a;
+}
+
+/* 事实 / 风险 / 无冲突 三类标签的语义色（中性主题下的最终取值） */
+.candidate-tags .tag-fact { background: #f0f0f2; color: var(--ink-2); }
+.candidate-tags .tag-caveat { background: #fbeaec; color: #8d2731; }
+.candidate-tags .tag-clear { background: #e6f4ee; color: #1c5942; }
 
 .tenant-avatar {
   background: #ededf0;

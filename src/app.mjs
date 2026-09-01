@@ -844,15 +844,47 @@ function minuteLabel(value) {
   return Number.isFinite(minutes) ? `${minutes} 分钟` : "待确认";
 }
 
+const SELECTION_TONE = {
+  首选: "primary",
+  省预算: "thrift",
+  住得好: "comfort"
+};
+
 function candidateCard(candidate, index) {
   const listing = candidate.listing;
   const selectionLabel = String(candidate.selectionLabel || "")
     .replace("综合最合适", "首选")
     .replace("预算最轻", "省预算")
     .replace("居住条件最好", "住得好");
+  const tone = SELECTION_TONE[selectionLabel] || "neutral";
+  // 理由为空时不能渲染背景胶囊，否则会在图片上留下一个空的深色方块。
+  const labelMarkup = selectionLabel
+    ? `<b class="candidate-label" data-tone="${escapeAttribute(tone)}">${escapeText(selectionLabel)}</b>`
+    : "";
+
+  // 客观事实与风险提示必须在视觉上可区分：事实是中性的，
+  // caveat 是需要用户注意的，两者用同一种灰色胶囊会埋掉风险。
+  const factTags = [
+    `${listing.room.areaSqm}㎡`,
+    `${listing.room.roommateCount} 位室友`
+  ].map((textValue) => `<span class="tag-fact">${escapeText(textValue)}</span>`).join("");
+  const caveat = candidate.caveats?.[0];
+  const caveatTag = caveat
+    ? `<span class="tag-caveat">${escapeText(caveat)}</span>`
+    : `<span class="tag-clear">条件无冲突</span>`;
+
+  // 匹配理由是本产品的核心价值（“解释匹配依据”），必须出现在决策发生的地方，
+  // 而不是只埋在详情页。否则列表页与普通租房列表无差别。
+  const reasons = Array.isArray(candidate.reasons) ? candidate.reasons.slice(0, 2) : [];
+  const reasonList = reasons.length
+    ? `<ul class="candidate-reasons">${reasons
+      .map((reason) => `<li>${escapeText(reason)}</li>`)
+      .join("")}</ul>`
+    : "";
+
   return `<article class="candidate-card"><button data-action="open-candidate" data-id="${escapeAttribute(listing.id)}">
-    <div class="candidate-photo">${listingPhotoMarkup(listing, { priority: index === 0 })}<span class="candidate-index">0${index + 1}</span><b class="candidate-label">${escapeText(selectionLabel)}</b></div>
-    <div class="candidate-copy"><div><h2>${escapeText(listing.shortTitle)}</h2><strong>¥${formatInteger(candidate.agreedRent)}<small>/月</small></strong></div><p>${escapeText(listing.station)} · 步行 ${minuteLabel(listing.walkMinutes)} · 通勤 ${minuteLabel(listing.commuteMinutes)}</p><div class="candidate-tags"><span>${escapeText(listing.room.areaSqm)}㎡</span><span>${escapeText(listing.room.roommateCount)} 位室友</span><span>${escapeText(candidate.caveats[0] || "条件无冲突")}</span></div></div>
+    <div class="candidate-photo">${listingPhotoMarkup(listing, { priority: index === 0 })}<span class="candidate-index">0${index + 1}</span>${labelMarkup}</div>
+    <div class="candidate-copy"><div><h2>${escapeText(listing.shortTitle)}</h2><strong>¥${formatInteger(candidate.agreedRent)}<small>/月</small></strong></div><p>${escapeText(listing.station)} · 步行 ${minuteLabel(listing.walkMinutes)} · 通勤 ${minuteLabel(listing.commuteMinutes)}</p>${reasonList}<div class="candidate-tags">${factTags}${caveatTag}</div></div>
   </button></article>`;
 }
 
